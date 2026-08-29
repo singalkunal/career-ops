@@ -1,35 +1,18 @@
-import fs from "node:fs";
-import path from "node:path";
-import { careerOpsRoot } from "@/lib/career-ops";
+import { careerOpsRoot, findReportFile } from "@/lib/career-ops";
+import { reportNumberFromFile, resolvePdfArtifact, resolveUniqueCompanyPdf } from "@/lib/cv-artifacts.mjs";
 
 /**
- * Locate the tailored CV PDF the real `pdf` mode wrote to output/ for a given
- * company (newest match wins). STRICT company match — never returns a CV tailored
- * for a different company (we'd rather attach nothing than the wrong CV). Mirrors
- * the matching in /api/cv-pdf so the "View tailored CV" link and the apply
- * file-upload always resolve to the SAME file. Returns an absolute path or null.
+ * Resolve a tracked application's exact manifest-linked CV. Pasted URLs with no
+ * tracker identity use a company fallback only when exactly one PDF matches.
  */
-export function resolveTailoredCv(company?: string): string | null {
-  const c = (company ?? "").trim();
-  if (!c) return null;
-  const dir = path.join(careerOpsRoot(), "output");
-  let files: string[];
-  try {
-    files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".pdf"));
-  } catch {
-    return null;
+export function resolveTailoredCv({ n, company }: { n?: string; company?: string }) {
+  const root = careerOpsRoot();
+  if ((n ?? "").trim()) {
+    const reportFile = findReportFile(n!);
+    const reportNum = reportFile ? reportNumberFromFile(reportFile) : null;
+    return reportNum ? resolvePdfArtifact(root, reportNum) : null;
   }
-  // Token-extract instead of replace-then-trim: same slug, and no `-+$`-style
-  // pattern that backtracks polynomially on adversarial input (CodeQL).
-  const slug = (c.toLowerCase().match(/[a-z0-9]+/g) ?? []).join("-");
-  const first = slug.split("-")[0];
-  const matches = files.filter((f) => {
-    const l = f.toLowerCase();
-    return l.includes(slug) || (first.length > 2 && l.includes(first));
-  });
-  if (!matches.length) return null;
-  matches.sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
-  return path.join(dir, matches[0]);
+  return resolveUniqueCompanyPdf(root, company ?? "");
 }
 
 /**

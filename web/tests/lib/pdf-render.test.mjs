@@ -19,6 +19,7 @@ import {
   markTrackerReady,
   cleanupPdfScratch,
   renderAndMarkPdf,
+  renderLatexAndMarkPdf,
 } from "../../src/lib/pdf-render.mjs";
 
 // A fake child_process.spawn() result: stdout/stderr emit "data" once, then
@@ -254,6 +255,28 @@ test("renderAndMarkPdf: happy path -> rendered with no warnings, scratch cleaned
   }
 });
 
+test("renderAndMarkPdf: records the resolved CV positioning in the PDF manifest", async () => {
+  const root = makeScratchDir();
+  const scratch = join(root, ".career-ops-web", "pdf-tmp");
+  mkdirSync(scratch, { recursive: true });
+  mkdirSync(join(root, "data"), { recursive: true });
+  const pdfPaths = { html: join(scratch, "cv-web-30.html"), finalPdf: join(root, "output", "cv-jane-lemma.pdf") };
+  writeFileSync(pdfPaths.html, "<html></html>");
+  writeFileSync(join(root, "data", "pdf-index.tsv"), "# report\tpdf\thtml\tformat\tdate\n30\toutput/cv-jane-lemma.pdf\t\tletter\t2026-08-27\n");
+  const { spawnFn } = makeRouterSpawn({
+    "generate-pdf.mjs": { exitCode: 0 },
+    "mark-pdf-ready.mjs": { exitCode: 0, stdout: JSON.stringify({ changed: true }) },
+  });
+  try {
+    const result = await renderAndMarkPdf({ spawnFn, execPath: "node", root, pdfPaths, format: "letter", reportNum: "30", positioning: "fde" });
+    assert.deepEqual(result, { kind: "rendered", warnings: [] });
+    assert.match(readFileSync(join(root, "data", "pdf-index.tsv"), "utf8"), /\tpositioning/);
+    assert.match(readFileSync(join(root, "data", "pdf-index.tsv"), "utf8"), /\tfde\n/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("renderAndMarkPdf: generate-pdf.mjs fails -> render-failed, mark-pdf-ready never invoked, scratch still cleaned up", async () => {
   // Given generate-pdf.mjs exits non-zero
   const dir = makeScratchDir();
@@ -319,6 +342,49 @@ test("renderAndMarkPdf: render succeeds but mark-pdf-ready fails with no parseab
     assert.match(result.warnings[0], /node mark-pdf-ready\.mjs 5/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("renderLatexAndMarkPdf publishes a one-page user-owned CV", async () => {
+  const root = makeScratchDir();
+  try {
+    mkdirSync(join(root, "data"), { recursive: true });
+    const source = join(root, "source.tex");
+    const pdfPaths = {
+      html: join(root, ".career-ops-web", "pdf-tmp", "cv-web-30.html"),
+      patches: join(root, ".career-ops-web", "pdf-tmp", "cv-web-30.patches.json"),
+      tex: join(root, "output", "cv-jane-acme.tex"),
+      finalPdf: join(root, "output", "cv-jane-acme.pdf"),
+    };
+    mkdirSync(join(root, ".career-ops-web", "pdf-tmp"), { recursive: true });
+    mkdirSync(join(root, "output"), { recursive: true });
+    writeFileSync(source, "source");
+    const spawnFn = (execPath, args) => {
+      if (execPath === "pdfinfo") return fakeChild({ stdout: "Pages:           1\n" });
+      if (String(args[0]).endsWith("render-user-latex.mjs")) {
+        writeFileSync(pdfPaths.tex, "tailored");
+        writeFileSync(pdfPaths.finalPdf, "%PDF-1.4\n");
+        return fakeChild({ stdout: JSON.stringify({ compiled: true }) });
+      }
+      return fakeChild({ stdout: JSON.stringify({ changed: true }) });
+    };
+    const result = await renderLatexAndMarkPdf({
+      spawnFn,
+      execPath: "node",
+      root,
+      pdfPaths,
+      source,
+      patches: [{ id: "skill-0", text: "MCP | RAG | evals" }],
+      format: "letter",
+      reportNum: "30",
+      positioning: "agentic",
+      maxPages: 1,
+      strictPages: true,
+    });
+    assert.deepEqual(result, { kind: "rendered", warnings: [], pages: 1 });
+    assert.match(readFileSync(join(root, "data", "pdf-index.tsv"), "utf8"), /output\/cv-jane-acme\.tex/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

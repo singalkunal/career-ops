@@ -1,6 +1,6 @@
 # Mode: latex-tex — Tailor a user-owned LaTeX CV in place
 
-Opt-in mode for candidates who already maintain a hand-tuned `.tex` CV. **Does not change the global source of truth** — `cv.md` remains the default for evaluations, apply mode, and auto-pipeline. Invoke explicitly via `/career-ops latex-tex`.
+Mode for candidates who already maintain a hand-tuned `.tex` CV. **Does not change the global source of truth** — `cv.md` remains the default evidence source for evaluations and apply mode. Invoke explicitly via `/career-ops latex-tex`, or select it for PDF generation with `cv.output_format: latex` plus `latex.source`/`latex.sources`.
 
 ## When to use
 
@@ -20,9 +20,10 @@ Any other layout → stop with the script error and suggest `/career-ops latex` 
 
 ## Source file resolution
 
-1. `config/profile.yml → latex.source` if set
-2. Else `resume.tex` in project root
-3. Else `cv.tex` in project root
+1. `config/profile.yml → latex.sources.{agentic|fde}` for the selected positioning, if set
+2. `config/profile.yml → latex.source` if set
+3. Else `resume.tex` in project root
+4. Else `cv.tex` in project root
 
 If none exist, stop and ask the user to add their `.tex` file or set `latex.source`.
 
@@ -30,6 +31,9 @@ If none exist, stop and ask the user to add their `.tex` file or set `latex.sour
 # config/profile.yml (optional, user layer)
 latex:
   source: resume.tex
+  sources:
+    agentic: resume-agentic.tex
+    fde: resume-fde.tex
 ```
 
 ## Pipeline
@@ -73,7 +77,7 @@ Same as `modes/latex.md` and `modes/pdf.md`:
 
 - Does not replace `cv.md` as the system source of truth
 - Does not parse arbitrary LaTeX templates
-- Does not auto-run during auto-pipeline or evaluation
+- Does not run during evaluation; auto-pipeline uses it only when the profile explicitly selects LaTeX and provides a user-owned source
 - Does not submit applications
 
 ## Relationship to `latex` mode

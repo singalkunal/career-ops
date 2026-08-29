@@ -40,7 +40,10 @@ test("resolvePdfPaths: happy path builds html + finalPdf from report + profile",
     // Then it returns deterministic scratch + final paths using the candidate/company slugs
     assert.equal(result.ok, true);
     assert.equal(result.paths.html, join(root, ".career-ops-web", "pdf-tmp", "cv-web-018.html"));
+    assert.equal(result.paths.patches, join(root, ".career-ops-web", "pdf-tmp", "cv-web-018.patches.json"));
+    assert.equal(result.paths.tex, join(root, "output", "cv-jane-smith-acme-2026-07-26.tex"));
     assert.equal(result.paths.finalPdf, join(root, "output", "cv-jane-smith-acme-2026-07-26.pdf"));
+    assert.equal(result.paths.reportNum, "018");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -114,7 +117,7 @@ test("resolvePdfPaths: malformed profile.yml falls back to the default candidate
   }
 });
 
-test("resolvePdfPaths: report filename that doesn't match the expected pattern falls back to the default company slug", () => {
+test("resolvePdfPaths: report filename with no report number fails closed", () => {
   // Given findReportFile resolves to a filename that doesn't match ^\d+-(.+)-YYYY-MM-DD.md$
   const root = makeRoot();
   const findReportFile = (input) => (input === "7" ? join(root, "reports", "not-the-expected-shape.md") : null);
@@ -122,9 +125,21 @@ test("resolvePdfPaths: report filename that doesn't match the expected pattern f
     // When resolving paths for report #7
     const result = resolvePdfPaths("7", "2026-07-26", root, findReportFile);
 
-    // Then it still succeeds, using the "company" fallback slug
+    assert.equal(result.ok, false);
+    assert.match(result.error, /canonical report number/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolvePdfPaths: tracker number resolves to the linked report number", () => {
+  const root = makeRoot();
+  const findReportFile = (input) => (input === "309" ? join(root, "reports", "308-acme-2026-07-01.md") : null);
+  try {
+    const result = resolvePdfPaths("309", "2026-07-26", root, findReportFile);
     assert.equal(result.ok, true);
-    assert.equal(result.paths.finalPdf, join(root, "output", "cv-jane-smith-company-2026-07-26.pdf"));
+    assert.equal(result.paths.reportNum, "308");
+    assert.equal(result.paths.html, join(root, ".career-ops-web", "pdf-tmp", "cv-web-308.html"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

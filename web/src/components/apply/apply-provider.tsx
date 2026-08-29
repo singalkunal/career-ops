@@ -75,6 +75,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState("");
   const sessionId = useRef<string | null>(null);
   const companyRef = useRef<string>("");
+  const nRef = useRef<string>("");
   const fieldsRef = useRef<ApplyField[]>([]);
   fieldsRef.current = fields;
   const answersRef = useRef<Record<string, string>>({});
@@ -167,6 +168,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setCompany(opts?.company ?? "");
     companyRef.current = opts?.company ?? "";
     setN(opts?.n ?? "");
+    nRef.current = opts?.n ?? "";
     setFrom(opts?.from ?? "");
     pendingPrefill.current = false;
     try {
@@ -302,7 +304,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setStatus("filling");
     setSteps([]);
     try {
-      const r = await fetch("/api/apply/fill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, answers, fields, handoff: true, company: companyRef.current }) });
+      const r = await fetch("/api/apply/fill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, answers, fields, handoff: true, company: companyRef.current, n: nRef.current }) });
       const d = await r.json();
       // Also stops the escalation below from starting an agent drive on a
       // session the user has already walked away from.
@@ -402,6 +404,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     if (sessionId.current) closeSession(sessionId.current);
     sessionId.current = null;
     companyRef.current = "";
+    nRef.current = "";
     pendingPrefill.current = false;
     setStatus("idle");
     setUrl("");

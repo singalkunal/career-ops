@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import {
   accumulateTokens,
   codexStreamArgs,
+  codexReadOnlyArgs,
   completedReportNames,
   hasNewCompletedReport,
   isFatalClaudeStderr,
@@ -431,6 +432,16 @@ test("codexStreamArgs turns on the JSONL that parseCodexEvent reads", () => {
   // Then: --json produces the events, --color never keeps ANSI out of the strings,
   // and the prompt stays last (a positional, not a flag value).
   assert.deepEqual(args, ["exec", "--json", "--color", "never", "PROMPT"]);
+});
+
+test("codexReadOnlyArgs structurally confines the corner assistant", () => {
+  const args = codexReadOnlyArgs("PROMPT");
+  assert.deepEqual(args.slice(0, 3), ["--ask-for-approval", "never", "exec"]);
+  assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+  assert.ok(args.includes("--strict-config"));
+  assert.ok(args.includes("--ignore-user-config"));
+  assert.ok(args.includes("--ephemeral"));
+  assert.equal(args.at(-1), "PROMPT");
 });
 
 test("the argv keeps --json and the parser reads the JSONL it turns on", () => {
