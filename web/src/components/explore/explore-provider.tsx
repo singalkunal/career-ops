@@ -4,12 +4,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRouter } from "next/navigation";
 import {
   DEFAULT_FILTERS,
-  ATS_LABEL,
+  DISCOVERY_LABEL,
   filtersToParams,
   aiToParams,
   isBroadSearch,
   parseExplorePatch,
-  type AtsSource,
+  type DiscoverySource,
   type DiscoveredOffer,
   type ExploreFilters,
   type ExploreMode,
@@ -50,7 +50,7 @@ type ExploreCtx = {
   phase: Phase;
   running: boolean;
   offers: DiscoveredOffer[];
-  sources: Partial<Record<AtsSource, SourceState>>;
+  sources: Partial<Record<DiscoverySource, SourceState>>;
   matchCount: number;
   companiesScanned: number;
   companiesAvailable: number;
@@ -68,6 +68,9 @@ type ExploreCtx = {
   /** Load the SUPPLY-loop offers Today's "Fresh matches this week" already
    *  fetched from /api/whats-new, straight into the results phase — no scan. */
   loadFresh: () => Promise<void>;
+  loadMoreFresh: () => Promise<void>;
+  freshHistory: boolean;
+  loadingMoreFresh: boolean;
   addToPipeline: (offers: DiscoveredOffer[]) => Promise<number>;
   applyPatch: (raw: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => void;
   reset: () => void;
@@ -102,7 +105,7 @@ type ResultSnapshot = {
   companiesAvailable: number;
   capHit: boolean;
   droppedNoDate: number;
-  sources: Partial<Record<AtsSource, SourceState>>;
+  sources: Partial<Record<DiscoverySource, SourceState>>;
   partial: boolean;
   status: string;
   error: string;
@@ -111,6 +114,7 @@ type ResultSnapshot = {
   aiTrace: AiTraceChunk[];
   aiCost: AiCost;
   aiIntent: string;
+  freshHistory?: boolean;
 };
 
 export function ExploreProvider({ children }: { children: React.ReactNode }) {
@@ -119,7 +123,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const touched = useRef(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [offers, setOffers] = useState<DiscoveredOffer[]>([]);
-  const [sources, setSources] = useState<Partial<Record<AtsSource, SourceState>>>({});
+  const [sources, setSources] = useState<Partial<Record<DiscoverySource, SourceState>>>({});
   const [matchCount, setMatchCount] = useState(0);
   const [companiesScanned, setCompaniesScanned] = useState(0);
   // Authoritative scan-health signals (scanner --json mode, #1199): tell a capped /
@@ -137,6 +141,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const [aiIntent, setAiIntent] = useState("");
   const [aiTrace, setAiTrace] = useState<AiTraceChunk[]>([]);
   const [aiCost, setAiCost] = useState<AiCost>({ searches: 0, candidates: 0, fetches: 0 });
+  const [freshHistory, setFreshHistory] = useState(false);
+  const [loadingMoreFresh, setLoadingMoreFresh] = useState(false);
   const runningRef = useRef(false);
   const aiIntentRef = useRef(aiIntent);
   aiIntentRef.current = aiIntent;
@@ -168,8 +174,10 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setPartial(false);
     setError("");
     setScannerMissing(false);
+    setFreshHistory(false);
+    setLoadingMoreFresh(false);
     setStatus("Casting the net across the ATS network…");
-    const init: Partial<Record<AtsSource, SourceState>> = {};
+    const init: Partial<Record<DiscoverySource, SourceState>> = {};
     for (const a of f.ats) init[a] = { state: "queued" };
     setSources(init);
     if (typeof window !== "undefined") {
@@ -222,17 +230,17 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
             switch (ev.kind) {
               case "atsStart":
                 setPhase("scanning");
-                setStatus(`Walking ${ATS_LABEL[ev.ats as AtsSource] ?? ev.ats} — ${ev.companies.toLocaleString()} companies`);
-                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: "active", companies: ev.companies } }));
+                setStatus(`Walking ${DISCOVERY_LABEL[ev.ats as DiscoverySource] ?? ev.ats} — ${ev.companies.toLocaleString()} companies`);
+                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as DiscoverySource], state: "active", companies: ev.companies } }));
                 break;
               case "progress":
                 // `matches` is the GLOBAL running total (the engine batches the
                 // offer list to the very end), so it drives the live hero counter.
                 setMatchCount((m) => Math.max(m, ev.matches));
-                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: "active", done: ev.scanned, total: ev.total } }));
+                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as DiscoverySource], state: "active", done: ev.scanned, total: ev.total } }));
                 break;
               case "atsDone":
-                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: ev.unreachable > 0 ? "noisy" : "swept", unreachable: ev.unreachable } }));
+                setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as DiscoverySource], state: ev.unreachable > 0 ? "noisy" : "swept", unreachable: ev.unreachable } }));
                 break;
               case "offer":
                 acc.push(ev.offer);
@@ -271,7 +279,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     // Mark any still-active sources as swept (stream ended).
     setSources((s) => {
       const next = { ...s };
-      for (const k of Object.keys(next) as AtsSource[]) if (next[k]?.state === "active" || next[k]?.state === "queued") next[k] = { ...next[k]!, state: "swept" };
+      for (const k of Object.keys(next) as DiscoverySource[]) if (next[k]?.state === "active" || next[k]?.state === "queued") next[k] = { ...next[k]!, state: "swept" };
       return next;
     });
 
@@ -314,6 +322,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setPartial(false);
     setSources({});
     setError("");
+    setFreshHistory(true);
+    setLoadingMoreFresh(false);
     try {
       // A finite ceiling, not `all`: explorer-view renders every offer it gets,
       // so an unbounded list would be an unbounded DOM. `count` below stays the
@@ -342,6 +352,35 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       runningRef.current = false;
     }
   }, []);
+
+  const loadMoreFresh = useCallback(async () => {
+    if (!freshHistory || loadingMoreFresh || offers.length >= matchCount) return;
+    setLoadingMoreFresh(true);
+    try {
+      const r = await fetch(`/api/whats-new?limit=${MAX_OFFER_LIMIT}&offset=${offers.length}`);
+      if (!r.ok) {
+        setError(`Couldn't load more fresh matches (${r.status}).`);
+        return;
+      }
+      const d = await r.json().catch(() => null);
+      if (!d || !Array.isArray(d.offers)) {
+        setError("Couldn't load more fresh matches — unexpected response.");
+        return;
+      }
+      const page: DiscoveredOffer[] = d.offers;
+      setOffers((current) => {
+        const seen = new Set(current.map((o) => o.url));
+        return [...current, ...page.filter((o) => !seen.has(o.url))];
+      });
+      const count = Number(d.count);
+      if (Number.isFinite(count)) setMatchCount(Math.max(0, Math.trunc(count)));
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't load more fresh matches.");
+    } finally {
+      setLoadingMoreFresh(false);
+    }
+  }, [freshHistory, loadingMoreFresh, offers.length, matchCount]);
 
   const addToPipeline = useCallback(async (list: DiscoveredOffer[]) => {
     const fresh = list.filter((o) => !added.has(o.url));
@@ -395,6 +434,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setPartial(false);
     setError("");
     setScannerMissing(false);
+    setFreshHistory(false);
+    setLoadingMoreFresh(false);
     setAiTrace([]);
     setAiCost({ searches: 0, candidates: 0, fetches: 0 });
     try {
@@ -427,6 +468,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setAiCost({ searches: 0, candidates: 0, fetches: 0 });
     setError("");
     setScannerMissing(false);
+    setFreshHistory(false);
+    setLoadingMoreFresh(false);
     setStatus("Casting across the open web…");
     if (typeof window !== "undefined") window.history.replaceState(null, "", `/explore?${aiToParams(intent)}`);
 
@@ -548,6 +591,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setAdded(new Set(Array.isArray(snap.added) ? snap.added : []));
     setAiTrace(Array.isArray(snap.aiTrace) ? snap.aiTrace : []);
     setAiCost(snap.aiCost ?? { searches: 0, candidates: 0, fetches: 0 });
+    setFreshHistory(!!snap.freshHistory);
+    setLoadingMoreFresh(false);
     if (typeof snap.aiIntent === "string") setAiIntent(snap.aiIntent);
     // Never rehydrate INTO a running phase — no live stream backs it.
     const RUNNING = new Set<Phase>(["casting", "scanning", "revealing", "hunting"]);
@@ -562,22 +607,23 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       const snap: ResultSnapshot = {
         v: 1, mode, phase, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources,
         partial, status, error, scannerMissing, added: [...added], aiTrace, aiCost, aiIntent,
+        freshHistory,
       };
       sessionStorage.setItem(RESULTS_KEY, JSON.stringify(snap));
     } catch {
       /* sessionStorage full/unavailable — non-fatal */
     }
-  }, [phase, mode, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources, partial, status, error, scannerMissing, added, aiTrace, aiCost, aiIntent]);
+  }, [phase, mode, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources, partial, status, error, scannerMissing, added, aiTrace, aiCost, aiIntent, freshHistory]);
 
   const value = useMemo(
     () => ({
       filters, setFilters, initFilters, phase,
       running: phase === "casting" || phase === "scanning" || phase === "revealing" || phase === "hunting",
       offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, partial, error, scannerMissing, added, adding,
-      discover, loadFresh, addToPipeline, applyPatch, reset,
+      discover, loadFresh, loadMoreFresh, freshHistory, loadingMoreFresh, addToPipeline, applyPatch, reset,
       mode, setMode, aiIntent, setAiIntent, discoverAI, aiTrace, aiCost,
     }),
-    [filters, setFilters, initFilters, phase, offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, partial, error, scannerMissing, added, adding, discover, loadFresh, addToPipeline, applyPatch, reset, mode, setMode, aiIntent, discoverAI, aiTrace, aiCost],
+    [filters, setFilters, initFilters, phase, offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, partial, error, scannerMissing, added, adding, discover, loadFresh, loadMoreFresh, freshHistory, loadingMoreFresh, addToPipeline, applyPatch, reset, mode, setMode, aiIntent, discoverAI, aiTrace, aiCost],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

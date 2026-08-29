@@ -601,7 +601,7 @@ Defaults are unchanged, so a single-lane setup needs none of this. Note that the
 
 ## scan:full
 
-Reverse ATS discovery scanner. Where `scan.mjs` scans the companies you track in `portals.yml`, this inverts the direction: it walks public directories of companies per ATS (Greenhouse, Lever, Ashby, Workday) and surfaces fresh postings matching your `portals.yml` `title_filter` / `location_filter` — no manual company curation. Company directories come from the public [job-board-aggregator](https://github.com/Feashliaa/job-board-aggregator) dataset, cached in `data/cache/` for 24 hours.
+Discovery scanner. Where `scan.mjs` scans the companies you track in `portals.yml`, this searches public ATS directories (Greenhouse, Lever, Ashby, Workday) and direct sources such as YC Startup Jobs, then applies your `portals.yml` title, location, content, and visa filters. ATS company directories come from the public [job-board-aggregator](https://github.com/Feashliaa/job-board-aggregator) dataset, cached in `data/cache/` for 24 hours.
 
 Postings without a usable publish date are skipped — a reverse scan is only useful for fresh postings. New matches are appended to `data/pipeline.md` and `data/scan-history.tsv` in the same format as `scan.mjs`.
 
@@ -632,14 +632,14 @@ node scan-ats-full.mjs --dry-run               # preview without writing
 node scan-ats-full.mjs --liveness              # Playwright-verify matches first
 node scan-ats-full.mjs --include-blacklisted   # audit blacklist matches instead of skipping
 node scan-ats-full.mjs --md-out notes/scans    # also write a dated markdown digest
-npm run scan:seeds                             # probe VC portfolio seed companies (--seeds yc,a16z)
-npm run scan:yc                                # Y Combinator portfolio only (--seeds yc)
+npm run scan:seeds                             # scan YC Startup Jobs plus a16z seed companies
+npm run scan:yc                                # search official YC Startup Jobs only
 ```
 
-`--seeds <list>` fetches comma-separated VC portfolio sources (e.g. `yc,a16z`)
-and probes those companies via the ATS providers instead of (or in addition
-to) the directory walk. Other flags: `--verbose`, `--json`, `--include-undated`,
-`--shuffle`.
+`--seeds <list>` selects comma-separated discovery sources (e.g. `yc,a16z`).
+YC reads the official Work at a Startup job search and job details directly;
+company-list sources such as a16z are probed through the ATS providers. Other
+flags: `--verbose`, `--json`, `--include-undated`, `--shuffle`.
 
 ### DNS pacing
 

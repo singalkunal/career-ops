@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { X, Ban, Clock, MapPin, ChevronDown, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { ATS_LABEL, ATS_SOURCES, cleanChips, type AtsSource, type ExploreFilters } from "@/lib/explore";
+import { DISCOVERY_LABEL, DISCOVERY_SOURCES, cleanChips, type DiscoverySource, type ExploreFilters } from "@/lib/explore";
 
 const RECENCY = [
   { label: "24h", days: 1 },
@@ -109,7 +109,7 @@ export function FilterBuilder({
 }) {
   const [advanced, setAdvanced] = useState(false);
   const set = (patch: Partial<ExploreFilters>) => onChange({ ...filters, ...patch });
-  const toggleAts = (a: AtsSource) => {
+  const toggleAts = (a: DiscoverySource) => {
     const has = filters.ats.includes(a);
     const next = has ? filters.ats.filter((x) => x !== a) : [...filters.ats, a];
     set({ ats: next.length ? next : filters.ats });
@@ -159,7 +159,7 @@ export function FilterBuilder({
         <div>
           <Label hint={filters.ats.length === 0 ? "pick at least one" : undefined}>Sources</Label>
           <div className="flex flex-wrap gap-1.5">
-            {ATS_SOURCES.map((a) => {
+            {DISCOVERY_SOURCES.map((a) => {
               const on = filters.ats.includes(a);
               return (
                 <button
@@ -171,7 +171,7 @@ export function FilterBuilder({
                     on ? "border-brand/40 bg-brand-soft text-brand" : "border-border text-muted hover:text-foreground",
                   )}
                 >
-                  {ATS_LABEL[a]}
+                  {DISCOVERY_LABEL[a]}
                 </button>
               );
             })}

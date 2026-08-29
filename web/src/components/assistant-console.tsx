@@ -17,6 +17,7 @@ import { dispatch, type ActionCtx, type DoneInfo } from "@/app/actions/registry"
 import { scoreNum } from "@/lib/format";
 import { pendingActOpenerStart } from "@/lib/act-envelope.mjs";
 import { cn } from "@/lib/cn";
+import { CONFIG_CHANGED_EVENT, readSavedCliId } from "@/lib/saved-cli";
 
 // ── message model: messages are PART arrays so a live worker card can render
 // inline next to text, both fed by the single JobsProvider store ──────────────
@@ -28,7 +29,6 @@ type Part =
   | { type: "confirm"; cid: string; summary: string; state: "pending" | "done" | "cancelled" };
 type Msg = { role: "user" | "assistant"; parts: Part[] };
 
-const CONFIG_KEY = "career-ops:config";
 const CHAT_KEY = "career-ops:chat";
 // back-compat shims — the old directives still work, mapped onto the registry
 const NAV_RE = /<<\s*go:\s*(\/[a-z0-9/_-]*)\s*>>/gi;
@@ -162,16 +162,15 @@ export function AssistantConsole() {
   // selected CLI from Config (reacts to changes in other tabs)
   useEffect(() => {
     function read() {
-      try {
-        const raw = localStorage.getItem(CONFIG_KEY);
-        setCliId(raw ? JSON.parse(raw).cliId || null : null);
-      } catch {
-        setCliId(null);
-      }
+      setCliId(readSavedCliId());
     }
     read();
     window.addEventListener("storage", read);
-    return () => window.removeEventListener("storage", read);
+    window.addEventListener(CONFIG_CHANGED_EVENT, read);
+    return () => {
+      window.removeEventListener("storage", read);
+      window.removeEventListener(CONFIG_CHANGED_EVENT, read);
+    };
   }, []);
 
   // restore + persist conversation

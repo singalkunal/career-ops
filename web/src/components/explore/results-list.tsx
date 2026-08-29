@@ -5,14 +5,17 @@ import { Search, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { DiscoveredOffer } from "@/lib/explore";
 import { CostBadge } from "@/components/cost/cost-badge";
+import { MAX_OFFER_LIMIT } from "@/lib/whats-new.mjs";
 import { DiscoveryCard } from "./discovery-card";
 import { useExplore } from "./explore-provider";
 
 export type EnrichedOffer = DiscoveredOffer & { inPipeline: boolean; evaluatedN?: string };
 
 export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
-  const { companiesScanned, partial, addToPipeline, added, mode } = useExplore();
+  const { companiesScanned, partial, addToPipeline, added, mode, matchCount, freshHistory, loadMoreFresh, loadingMoreFresh } = useExplore();
   const isAi = mode === "ai";
+  const total = freshHistory ? Math.max(matchCount, offers.length) : offers.length;
+  const hidden = Math.max(0, total - offers.length);
   const [sort, setSort] = useState<"fresh" | "company">("fresh");
   const [q, setQ] = useState("");
 
@@ -33,7 +36,8 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
       <div className="flex flex-wrap items-center gap-3">
         <div>
           <p className="text-sm text-foreground">
-            <span className="font-semibold">{offers.length}</span> {isAi ? `candidate${offers.length === 1 ? "" : "s"}` : `fresh role${offers.length === 1 ? "" : "s"}`}
+            <span className="font-semibold">{total}</span> {isAi ? `candidate${total === 1 ? "" : "s"}` : `fresh role${total === 1 ? "" : "s"}`}
+            {freshHistory && hidden > 0 && <span className="text-faint"> · showing newest {offers.length}</span>}
             <CostBadge kind={isAi ? "spend" : "free-network"} size="xs" className="ml-2 align-middle" />
           </p>
           <p className="text-[12px] text-faint">
@@ -82,6 +86,19 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
           <DiscoveryCard key={o.url} offer={o} inPipeline={o.inPipeline} evaluatedN={o.evaluatedN} />
         ))}
       </div>
+
+      {freshHistory && hidden > 0 && (
+        <div className="flex justify-center pt-2">
+          <button
+            type="button"
+            disabled={loadingMoreFresh}
+            onClick={() => void loadMoreFresh()}
+            className="rounded-lg border border-border bg-surface/50 px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-brand/40 hover:text-brand disabled:cursor-wait disabled:opacity-60"
+          >
+            {loadingMoreFresh ? "Loading…" : `Load ${Math.min(hidden, MAX_OFFER_LIMIT)} more`}
+          </button>
+        </div>
+      )}
 
       {view.length === 0 && <p className="py-10 text-center text-sm text-faint">No results match “{q}”.</p>}
     </div>

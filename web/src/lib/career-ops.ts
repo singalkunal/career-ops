@@ -3,6 +3,7 @@ import path from "node:path";
 import * as yaml from "js-yaml";
 import { atomicWrite } from "@/lib/core/safe-write";
 import { parseApplications } from "@/lib/tracker-table.mjs";
+import { manualJobLabel } from "@/lib/manual-job-url.mjs";
 // One definition of the `{n}-RESERVED.md` convention, shared with
 // run-cli-support.mjs — see report-files.mjs for why it lives there.
 import { isReservedReportFile } from "@/lib/report-files.mjs";
@@ -83,13 +84,15 @@ export function readInbox(): InboxJob[] {
       if (lm) labels.set(lm[1].toLowerCase(), lm[2].trim());
       else parts.push(seg);
     }
-    if (parts.length < 3 || !parts[0]) continue; // need at least url | company | role
+    if (!parts[0]) continue;
     const posted = labels.get("posted");
     jobs.push({
       done: m[1].toLowerCase() === "x",
       url: parts[0],
-      company: parts[1],
-      role: parts[2],
+      // A manually pasted URL can have no provider metadata yet. Keep the
+      // user-layer row factual (blank fields) while making it legible in the UI.
+      company: parts[1] || "Manual URL",
+      role: parts[2] || manualJobLabel(parts[0]),
       location: parts[3] || undefined, // optional 4th column (#1015)
       compensation: parts[4] || undefined, // optional 5th column (#1017); 6th+ ignored
       // the row's own posting date (scan.mjs `posted:` label) — a more direct

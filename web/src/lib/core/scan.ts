@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import { writeTempPortals, cleanupTempPortals } from "./portals";
-import { ATS_SOURCES, type DiscoveredOffer, type ExploreFilters, type ScanEvent } from "@/lib/explore";
+import { DISCOVERY_SOURCES, type DiscoveredOffer, type ExploreFilters, type ScanEvent } from "@/lib/explore";
 
 export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
-export { ATS_SOURCES } from "@/lib/explore";
+export { ATS_SOURCES, DISCOVERY_SOURCES } from "@/lib/explore";
 
 /**
  * ACL for the discovery engine — orchestrates the REAL core scanner
@@ -68,7 +68,7 @@ export function scannerSupportsJson(): boolean {
   }
 }
 
-type JsonOffer = { company?: string; title?: string; url?: string; location?: string | null; postedAt?: string | null; source?: string };
+type JsonOffer = { company?: string; title?: string; url?: string; location?: string | null; postedAt?: string | null; source?: string; note?: string | null };
 type ScanJson = {
   companiesAvailable?: number;
   companiesScanned?: number;
@@ -83,18 +83,20 @@ type ScanJson = {
 export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
   return new Promise((resolve) => {
     const tempPortals = writeTempPortals(filters);
-    const ats = (filters.ats.length ? filters.ats : [...ATS_SOURCES]).filter((a) => (ATS_SOURCES as readonly string[]).includes(a));
+    const selected = (filters.ats.length ? filters.ats : [...DISCOVERY_SOURCES])
+      .filter((source) => (DISCOVERY_SOURCES as readonly string[]).includes(source));
+    const ats = selected.filter((source) => source !== "yc");
+    const seeds = selected.includes("yc") ? ["yc"] : [];
     const useJson = scannerSupportsJson();
     const args = [
       rootScript("scan-ats-full"),
       "--dry-run",
       "--since",
       String(Math.max(1, filters.sinceDays || 7)),
-      "--ats",
-      ats.join(","),
-      "--limit",
-      String(Math.max(1, filters.limitPerAts || 150)),
     ];
+    if (ats.length) args.push("--ats", ats.join(","));
+    if (seeds.length) args.push("--seeds", seeds.join(","));
+    args.push("--limit", String(Math.max(1, filters.limitPerAts || 150)));
     if (useJson) args.push("--json");
 
     const child = spawn(process.execPath, args, {
@@ -104,7 +106,7 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
 
     const offers: DiscoveredOffer[] = [];
     const seen = new Set<string>();
-    let currentAts: string = ats[0] || "";
+    let currentAts: string = selected[0] || "";
     let pending: Omit<DiscoveredOffer, "url"> | null = null;
     let companiesScanned = 0;
     let unreachable = 0;
@@ -241,10 +243,11 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
               title: o.title,
               location: o.location || "",
               postedAt: o.postedAt || "",
-              ats: source.replace(/-full$/, ""),
+              ats: source === "yc-startup-jobs" ? "yc" : source.replace(/-full$/, ""),
               source,
               url,
               matchedKeyword: firstMatch(o.title, filters.positive),
+              ...(o.note ? { note: o.note } : {}),
             };
             offers.push(offer);
             onEvent({ kind: "offer", offer });

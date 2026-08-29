@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { CompanyLogo } from "@/components/company-logo";
 import { canonStatus, scoreNum, scoreTone, statusDot } from "@/lib/format";
 import { InboxTriage } from "@/components/inbox/inbox-triage";
+import { ManualJobEntry } from "@/components/manual-job-entry";
 import { cn } from "@/lib/cn";
 import { companyPresentation, companySearchText } from "@/lib/company-presentation.mjs";
 
@@ -142,6 +143,8 @@ export function PipelineView({
           </div>
         )}
       </div>
+
+      <ManualJobEntry knownUrls={inbox.map((job) => job.url)} />
 
       {/* tabs */}
       <div className="mt-6 flex flex-wrap gap-1 border-b border-border">

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { ApplyBackdrop } from "@/components/apply/apply-backdrop";
 import { instrumentSerif } from "@/lib/fonts";
-import { ATS_LABEL, ATS_SOURCES, type AtsSource } from "@/lib/explore";
+import { DISCOVERY_LABEL, DISCOVERY_SOURCES, type DiscoverySource } from "@/lib/explore";
 import { useExplore, type SourceState } from "./explore-provider";
 
 const STYLE = `
@@ -45,7 +45,7 @@ export function useCountUp(target: number): number {
   return Math.round(val);
 }
 
-function SourceChip({ ats, s }: { ats: AtsSource; s?: SourceState }) {
+function SourceChip({ ats, s }: { ats: DiscoverySource; s?: SourceState }) {
   const state = s?.state ?? "queued";
   const pct = s?.total ? Math.min(100, Math.round(((s.done ?? 0) / s.total) * 100)) : state === "swept" || state === "noisy" ? 100 : 0;
   return (
@@ -57,7 +57,7 @@ function SourceChip({ ats, s }: { ats: AtsSource; s?: SourceState }) {
       ) : (
         <span className="size-2.5 rounded-full border border-current opacity-40" />
       )}
-      <span className="text-[13px] font-medium text-foreground">{ATS_LABEL[ats]}</span>
+      <span className="text-[13px] font-medium text-foreground">{DISCOVERY_LABEL[ats]}</span>
       <div className="ml-auto flex flex-col items-end gap-1">
         {state === "noisy" && <span className="text-[10px] text-faint">~{s?.unreachable} skipped</span>}
         <div className="co-src__track">
@@ -92,7 +92,7 @@ export function DiscoveringState() {
         </div>
 
         <div className="co-src">
-          {ATS_SOURCES.map((a) => (
+          {DISCOVERY_SOURCES.map((a) => (
             <SourceChip key={a} ats={a} s={sources[a]} />
           ))}
         </div>
