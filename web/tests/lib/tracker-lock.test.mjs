@@ -33,9 +33,11 @@ const coreLock = path.join(CORE, "tracker-utils.mjs");
 // called that runnable: the cases failed on ERR_MODULE_NOT_FOUND instead of
 // skipping (#2922).
 let core = null;
+let pipelineLock = null;
 let skipCore = false;
 try {
   core = await import(pathToFileURL(coreLock).href);
+  pipelineLock = await import(pathToFileURL(path.join(CORE, "pipeline-lock.mjs")).href);
 } catch (err) {
   // Skipping is only correct where the core genuinely is not installed: no core
   // file here at all, or an unresolvable package in a checkout whose root deps
@@ -142,5 +144,46 @@ test("the lock is released on a throwing path, not just the happy one", { skip: 
     await again.release();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the default tracker lock lives in the gitignored workspace runtime", { skip: skipCore }, () => {
+  const { root, file } = makeTracker();
+  try {
+    const lockDir = core.trackerLockDirFor(file);
+    const canonicalRoot = fs.realpathSync(root);
+    assert.equal(path.relative(canonicalRoot, lockDir).split(path.sep).slice(0, 3).join("/"), ".career-ops-web/runtime/locks");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a POSIX tracker-lock permission failure surfaces immediately", {
+  skip: skipCore || process.platform === "win32",
+}, async () => {
+  const { root, file } = makeTracker();
+  const permissionError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      core.acquireTrackerLock(core.trackerLockDirFor(file), {
+        timeoutMs: 5_000,
+        createLockDir: () => { throw permissionError; },
+      }),
+      (error) => error === permissionError,
+    );
+    assert.ok(Date.now() - started < 500, "permission failure was treated as lock contention");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("EPERM and EACCES remain contention only on Windows", { skip: skipCore }, () => {
+  for (const code of ["EPERM", "EACCES"]) {
+    const error = { code };
+    assert.equal(pipelineLock.isMkdirContention(error, "win32"), true);
+    assert.equal(pipelineLock.isMkdirContention(error, "darwin"), false);
+    assert.equal(pipelineLock.isRmContention(error, "win32"), true);
+    assert.equal(pipelineLock.isRmContention(error, "darwin"), false);
   }
 });

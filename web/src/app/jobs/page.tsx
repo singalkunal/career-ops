@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Check, AlertTriangle, Loader2, Trash2 } from "lucide-react";
-import { useJobs } from "@/components/jobs/job-store";
+import { Check, AlertTriangle, Clock3, Loader2, Trash2, X } from "lucide-react";
+import { isJobActive, useJobs } from "@/components/jobs/job-store";
 import { pillTone } from "@/components/jobs/worker-pills";
 import { cn } from "@/lib/cn";
 
@@ -25,7 +25,7 @@ export default function JobsHistory() {
             Every evaluation you ran — a persistent log. <span className="tabular-nums">{jobs.length}</span> total.
           </p>
         </div>
-        {jobs.some((j) => j.status !== "running") && (
+        {jobs.some((j) => !isJobActive(j)) && (
           <button
             onClick={clearFinished}
             className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
@@ -46,10 +46,14 @@ export default function JobsHistory() {
             return (
               <li key={j.id}>
                 <Link href={`/jobs/${j.id}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-hover">
-                  {j.status === "running" ? (
+                  {j.status === "queued" ? (
+                    <Clock3 className="size-4 shrink-0 text-muted" />
+                  ) : j.status === "running" || j.status === "persisting" ? (
                     <Loader2 className="size-4 shrink-0 animate-spin text-brand" />
                   ) : j.status === "error" ? (
                     <AlertTriangle className="size-4 shrink-0 text-red-400" />
+                  ) : j.status === "cancelled" ? (
+                    <X className="size-4 shrink-0 text-zinc-400" />
                   ) : (
                     <Check className="size-4 shrink-0 text-emerald-500" />
                   )}

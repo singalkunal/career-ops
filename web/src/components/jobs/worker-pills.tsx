@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { X, History } from "lucide-react";
-import { useJobs } from "@/components/jobs/job-store";
+import { isJobActive, useJobs } from "@/components/jobs/job-store";
 import { WorkerCard, pillTone, TONE } from "@/components/jobs/worker-card";
 import { cn } from "@/lib/cn";
 
@@ -13,17 +13,19 @@ export { pillTone, TONE };
 // Collapsed "worker" pills in the sidebar — each the shared <WorkerCard> wrapped
 // in a Link to its detail. Same component the assistant chat renders inline.
 export function WorkerPills() {
-  const { jobs, removeJob, clearFinished } = useJobs();
+  const { jobs, cancelJob, removeJob, clearFinished } = useJobs();
   const pathname = usePathname();
   if (jobs.length === 0) return null;
-  const running = jobs.filter((j) => j.status === "running").length;
-  const finished = jobs.length - running;
+  const queued = jobs.filter((j) => j.status === "queued").length;
+  const running = jobs.filter((j) => j.status === "running" || j.status === "persisting").length;
+  const finished = jobs.filter((j) => !isJobActive(j)).length;
 
   return (
     <div className="mt-4 border-t border-border pt-3">
       <div className="mb-2 flex items-center gap-2 px-1">
         <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-faint">Workers</span>
         {running > 0 && <span className="text-[10px] tabular-nums text-brand">{running} running</span>}
+        {queued > 0 && <span className="text-[10px] tabular-nums text-muted">{queued} queued</span>}
         <Link href="/jobs" className="ml-auto text-faint transition-colors hover:text-foreground" title="History" aria-label="Worker history">
           <History className="size-3.5" />
         </Link>
@@ -52,10 +54,11 @@ export function WorkerPills() {
                     <button
                       onClick={(e) => {
                         e.preventDefault();
-                        removeJob(j.id);
+                        if (isJobActive(j)) cancelJob(j.id);
+                        else removeJob(j.id);
                       }}
                       className="text-faint opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-                      aria-label="Dismiss job"
+                      aria-label={isJobActive(j) ? "Cancel job" : "Dismiss job"}
                     >
                       <X className="size-3" />
                     </button>

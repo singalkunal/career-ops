@@ -1,5 +1,5 @@
-// tests/pipeline-lock-mkdir-eperm.test.mjs — a non-EEXIST mkdir refusal is
-// contention, not a fatal error (#2777).
+// tests/pipeline-lock-mkdir-eperm.test.mjs — POSIX permission failures surface
+// immediately instead of being reported as lock contention.
 //
 // mkdir's "someone else already has this" answer is not portable. POSIX gives
 // EEXIST; Windows gives EPERM/EACCES when the target is mid-flight, being
@@ -14,19 +14,17 @@
 // a writer killed by EPERM both surface as `kept=29 of 30` and only the second
 // one is a crash.
 //
-// Exercised here with a real refusal rather than a stubbed one: a parent
-// directory with no write permission makes mkdir answer EACCES, which travels
-// the same branch. The contract is that acquisition RETRIES and eventually
-// reports a LockTimeoutError naming what it kept hitting, instead of throwing
-// the raw errno straight at the caller on the first attempt.
+// Windows can answer EPERM/EACCES for transient lock-directory churn, but macOS
+// and Linux use those codes for a real permissions problem. Retrying one until
+// timeout hides the reason sandboxed writers failed.
 
 import { mkdtempSync, mkdirSync, chmodSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pass, fail } from './helpers.mjs';
-import { acquirePipelineLock, LockTimeoutError } from '../pipeline-lock.mjs';
+import { acquirePipelineLock } from '../pipeline-lock.mjs';
 
-console.log('\n🔒 pipeline-lock: a non-EEXIST mkdir refusal is contention, not fatal');
+console.log('\n🔒 pipeline-lock: POSIX mkdir permission failures surface immediately');
 
 // Two environments cannot produce the refusal this case needs, and in both a
 // green result would mean nothing. Skipping loudly beats asserting nothing
@@ -40,12 +38,6 @@ console.log('\n🔒 pipeline-lock: a non-EEXIST mkdir refusal is contention, not
 //     case failed on windows-latest with `got undefined` while the real
 //     Windows EPERM it defends against was already gone from the same run.
 //
-// The bug is Windows-only and the test is POSIX-only, which reads as a
-// contradiction and is not one: EACCES and EPERM meet in the same branch of
-// isMkdirContention(), so exercising either one covers the code path. What
-// cannot be reproduced anywhere on demand is Windows' *timing* window, which
-// is why this test manufactures a deterministic refusal instead of waiting
-// for a race.
 const cannotRefuse = (typeof process.getuid === 'function' && process.getuid() === 0)
   ? 'running as root, permission bits do not apply'
   : (process.platform === 'win32' ? 'win32: a POSIX mode cannot deny mkdir, so the refusal never happens' : null);
@@ -67,19 +59,10 @@ if (cannotRefuse) {
       thrown = err;
     }
 
-    if (thrown instanceof LockTimeoutError) {
-      pass('a refused mkdir is retried and reported as a lock timeout, not rethrown raw');
+    if (thrown?.code === 'EACCES' || thrown?.code === 'EPERM') {
+      pass(`a refused mkdir surfaces its permission error immediately (${thrown.code})`);
     } else {
-      fail(`expected LockTimeoutError after retrying, got ${thrown?.name}: ${thrown?.code ?? ''} ${thrown?.message ?? ''}`);
-    }
-
-    // The trade this makes is that a genuine permissions problem stops failing
-    // fast, so the timeout has to carry the reason or it becomes an unexplained
-    // hang. Without this the fix would swap one silent failure for another.
-    if (thrown?.lastMkdirError === 'EACCES' || thrown?.lastMkdirError === 'EPERM') {
-      pass(`the timeout names the refusal it kept hitting (${thrown.lastMkdirError})`);
-    } else {
-      fail(`timeout did not carry the mkdir errno: lastMkdirError=${JSON.stringify(thrown?.lastMkdirError)}`);
+      fail(`expected EACCES/EPERM, got ${thrown?.name}: ${thrown?.code ?? ''} ${thrown?.message ?? ''}`);
     }
   } finally {
     chmodSync(sealed, 0o700);

@@ -7,15 +7,17 @@ const GENERIC_FAILURE = "status update failed";
 /**
  * The CLI's JSON document, or null when stdout carries none.
  *
- * `--json` prints one JSON object, but diagnostics can precede it — a ledger
- * append warning, say. Scanning forward to the first `{` finds a brace inside
- * that diagnostic just as readily as the document, and the resulting slice does
- * not parse. The route then reports 500 for a write the CLI already committed,
- * losing `changed` and `statusLogged` with it.
+ * `--json` prints one JSON object, but it is pretty-printed across multiple
+ * lines and diagnostics can precede it — a ledger append warning, say.
+ * Parsing one line at a time therefore misses every successful result. Scanning
+ * forward to the first `{` is not safe either: a diagnostic can contain a brace
+ * of its own, and the resulting slice does not parse. The route then reports 500
+ * for a write the CLI already committed, losing `changed` and `statusLogged`.
  *
- * So the document is read from the end: the last line that parses as a plain
- * object is the result. A diagnostic that happens to be valid JSON cannot shadow
- * it, because the result is printed last.
+ * So the document is read from the end: the last line beginning with `{` whose
+ * full remaining suffix parses as a plain object is the result. A diagnostic
+ * that happens to be valid JSON cannot shadow it, because the result is printed
+ * last.
  *
  * @param {string} stdout
  * @returns {Record<string, unknown> | null}
@@ -26,7 +28,7 @@ export function parseCliJson(stdout) {
     const line = lines[i].trim();
     if (!line.startsWith("{")) continue;
     try {
-      const parsed = JSON.parse(line);
+      const parsed = JSON.parse(lines.slice(i).join("\n").trim());
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return /** @type {Record<string, unknown>} */ (parsed);
       }

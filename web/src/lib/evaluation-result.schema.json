@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Career Ops evaluation result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "error", "report_markdown", "machine_summary", "tracker"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "career-ops-evaluation/v1" },
+    "status": { "type": "string", "enum": ["completed", "failed"] },
+    "error": { "type": ["string", "null"] },
+    "report_markdown": { "type": ["string", "null"] },
+    "machine_summary": {
+      "anyOf": [
+        { "$ref": "#/$defs/machine_summary" },
+        { "type": "null" }
+      ]
+    },
+    "tracker": {
+      "anyOf": [
+        { "$ref": "#/$defs/tracker" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "$defs": {
+    "string_array": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "maxLength": 1000 }
+    },
+    "risk_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["legitimacy", "classification", "culture", "interview_redflags", "ai_infra", "ai_screening_disclosure"],
+      "properties": {
+        "legitimacy": { "type": "string", "enum": ["high_confidence", "proceed_with_caution", "suspicious"] },
+        "classification": { "type": "string", "enum": ["clear", "flagged", "not_evaluated"] },
+        "culture": { "type": "string", "enum": ["pass", "caution", "fail", "not_evaluated"] },
+        "interview_redflags": { "type": "string", "enum": ["none", "caution", "warning", "not_evaluated"] },
+        "ai_infra": { "type": "string", "enum": ["consistent", "mismatch", "not_evaluated"] },
+        "ai_screening_disclosure": { "type": "string", "enum": ["disclosed", "corroborating_only", "no_match", "not_evaluated"] }
+      }
+    },
+    "machine_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["company", "role", "score", "legitimacy_tier", "archetype", "final_decision", "hard_stops", "soft_gaps", "top_strengths", "risk_level", "confidence", "next_action", "work_auth", "discard_reasons", "via", "company_confidential", "advertised_comp", "reports_to", "risk_summary"],
+      "properties": {
+        "company": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "role": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "score": { "type": "number", "minimum": 0, "maximum": 5 },
+        "legitimacy_tier": { "type": "string", "enum": ["High Confidence", "Proceed with Caution", "Suspicious"] },
+        "archetype": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "final_decision": { "type": "string", "enum": ["Apply", "Consider", "Research first", "Skip"] },
+        "hard_stops": { "$ref": "#/$defs/string_array" },
+        "soft_gaps": { "$ref": "#/$defs/string_array" },
+        "top_strengths": { "$ref": "#/$defs/string_array" },
+        "risk_level": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "confidence": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "next_action": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "work_auth": { "type": "string", "enum": ["sponsors", "not_needed", "unstated", "no_sponsorship"] },
+        "discard_reasons": { "$ref": "#/$defs/string_array" },
+        "via": { "type": ["string", "null"], "maxLength": 200 },
+        "company_confidential": { "type": "boolean" },
+        "advertised_comp": { "type": ["string", "null"], "maxLength": 500 },
+        "reports_to": { "type": ["string", "null"], "maxLength": 500 },
+        "risk_summary": { "$ref": "#/$defs/risk_summary" }
+      }
+    },
+    "tracker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "note"],
+      "properties": {
+        "status": { "type": "string", "const": "Evaluated" },
+        "note": { "type": "string", "maxLength": 1000 }
+      }
+    }
+  }
+}

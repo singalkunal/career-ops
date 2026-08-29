@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveCli } from "@/lib/clis";
 import { careerOpsRoot, readMemory } from "@/lib/career-ops";
 import { assembleDedupContext } from "@/lib/core/discover";
+import { spawnSupervised } from "@/lib/process-supervisor.mjs";
 
 // AI search orchestrates modes/discover.md by running the USER'S configured CLI
 // headless (CLI-agnostic, like the assistant). Web hunting is slow → generous
@@ -235,16 +236,13 @@ export async function POST(req: Request) {
         ]
       : spec.args(prompt);
 
-  // POSIX detached children become process-group leaders. Keeping stdio
-  // piped means Node still tracks the Codex process normally.
-  const useCodexProcessGroup =
-    isCodex && process.platform !== "win32";
-
-  const child = spawnHeadlessCli(binPath, args, {
+  const supervised = spawnSupervised(binPath, args, {
     cwd: childCwd,
     env: process.env,
-    detached: useCodexProcessGroup,
+  }, {
+    spawnFn: spawnHeadlessCli,
   });
+  const { child } = supervised;
 
   const cleanupChildCwd = () => {
     if (!isCodex) return;
@@ -261,61 +259,16 @@ export async function POST(req: Request) {
   // controller and throw an uncaught "Controller is already closed" (see #1155).
   let closed = false;
   let killer: ReturnType<typeof setTimeout> | undefined;
-  let forceKill: ReturnType<typeof setTimeout> | undefined;
-
-  const isCodexProcessGroupAlive = () => {
-    if (!useCodexProcessGroup || !child.pid) return false;
-
-    try {
-      process.kill(-child.pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
 
   const clearTerminationTimers = () => {
     if (killer) {
       clearTimeout(killer);
       killer = undefined;
     }
-
-    // If the group leader exited but a descendant ignored SIGTERM, retain the
-    // SIGKILL fallback until the remaining process group is gone.
-    if (forceKill && !isCodexProcessGroupAlive()) {
-      clearTimeout(forceKill);
-      forceKill = undefined;
-    }
-  };
-
-  const signalChild = (signal: NodeJS.Signals): boolean => {
-    if (useCodexProcessGroup && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return true;
-      } catch {
-        /* group may already be gone; fall back to the direct child */
-      }
-    }
-
-    try {
-      return child.kill(signal);
-    } catch {
-      return false;
-    }
   };
 
   const terminateChild = () => {
-    const termSent = signalChild("SIGTERM");
-
-    if (!isCodex || !termSent || forceKill) return;
-
-    forceKill = setTimeout(() => {
-      signalChild("SIGKILL");
-      forceKill = undefined;
-    }, 5_000);
-
-    forceKill.unref?.();
+    void supervised.terminate("AI search cancelled");
   };
 
   const stream = new ReadableStream<Uint8Array>({
@@ -394,78 +347,81 @@ export async function POST(req: Request) {
           safeEnqueue(`\n[${spec.name}] ${s.trim()}\n`);
         }
       });
-      child.on("error", (e) => {
+      child.on("error", (e: Error) => {
         safeEnqueue(`
 [error launching ${spec.name}: ${e.message}]`);
         cleanupChildCwd();
         safeClose();
       });
 
-      child.on("close", (code) => {
-        clearTerminationTimers();
+      child.on("close", (code: number | null) => {
+        void (async () => {
+          clearTerminationTimers();
+          await supervised.stopRemainingTree();
 
-        if (closed) {
-          cleanupChildCwd();
-          return;
-        }
-
-        if (isCodex) {
-          let finalText = "";
-
-          try {
-            if (codexResultFile && fs.existsSync(codexResultFile)) {
-              finalText = fs.readFileSync(codexResultFile, "utf8").trim();
-            }
-          } catch {
-            /* handled below as missing final output */
+          if (closed) {
+            cleanupChildCwd();
+            return;
           }
 
-          if (finalText) {
-            emit(finalText);
-          } else if (code !== 0) {
-            const diagnosticText = codexStderr.trim();
-            const diagnosticsCaptured = diagnosticText.length > 0;
+          if (isCodex) {
+            let finalText = "";
 
-            if (diagnosticsCaptured) {
-              const lowerDiagnostics = diagnosticText.toLowerCase();
-              const diagnosticMarkers = [
-                "error",
-                "fatal",
-                "failed",
-                "denied",
-                "not found",
-                "invalid",
-                "unsupported",
-              ].filter((marker) => lowerDiagnostics.includes(marker));
-
-              // Codex stderr may contain the complete user prompt. Log only
-              // bounded metadata and marker categories, never its contents.
-              console.error("[Codex AI search exited without a final response]", {
-                exitCode: code ?? "unknown",
-                stderrBytes: Buffer.byteLength(diagnosticText, "utf8"),
-                stderrLines: diagnosticText.split(/\r?\n/).length,
-                diagnosticMarkers,
-              });
+            try {
+              if (codexResultFile && fs.existsSync(codexResultFile)) {
+                finalText = fs.readFileSync(codexResultFile, "utf8").trim();
+              }
+            } catch {
+              /* handled below as missing final output */
             }
 
-            safeEnqueue(
-              `
+            if (finalText) {
+              emit(finalText);
+            } else if (code !== 0) {
+              const diagnosticText = codexStderr.trim();
+              const diagnosticsCaptured = diagnosticText.length > 0;
+
+              if (diagnosticsCaptured) {
+                const lowerDiagnostics = diagnosticText.toLowerCase();
+                const diagnosticMarkers = [
+                  "error",
+                  "fatal",
+                  "failed",
+                  "denied",
+                  "not found",
+                  "invalid",
+                  "unsupported",
+                ].filter((marker) => lowerDiagnostics.includes(marker));
+
+                // Codex stderr may contain the complete user prompt. Log only
+                // bounded metadata and marker categories, never its contents.
+                console.error("[Codex AI search exited without a final response]", {
+                  exitCode: code ?? "unknown",
+                  stderrBytes: Buffer.byteLength(diagnosticText, "utf8"),
+                  stderrLines: diagnosticText.split(/\r?\n/).length,
+                  diagnosticMarkers,
+                });
+              }
+
+              safeEnqueue(
+                `
 [Codex exited with code ${code ?? "unknown"}${
-                diagnosticsCaptured ? "; diagnostic output captured" : ""
-              }]
+                  diagnosticsCaptured ? "; diagnostic output captured" : ""
+                }]
 `,
-            );
-          } else if (!emitted) {
-            safeEnqueue("_(no final output from Codex)_");
+              );
+            } else if (!emitted) {
+              safeEnqueue("_(no final output from Codex)_");
+            }
+
+            cleanupChildCwd();
+            safeClose();
+            return;
           }
 
-          cleanupChildCwd();
+          if (!emitted) safeEnqueue("_(no output — is the CLI authenticated?)_");
           safeClose();
-          return;
-        }
-
-        if (!emitted) safeEnqueue("_(no output — is the CLI authenticated?)_");
-        safeClose();
+        })();
       });
     },
     cancel() {

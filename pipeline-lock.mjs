@@ -122,11 +122,12 @@ export function sameLockDirectory(left, right) {
 // because a starving writer and a writer killed by EPERM produce the same
 // `kept=29 of 30` and only the second is a crash.
 //
-// A genuine permissions problem still surfaces: it simply stops being an
-// instant throw and becomes a timeout that names the last error it saw, which
-// is the correct trade when the alternative is silent data loss.
-export function isMkdirContention(err) {
-  return err?.code === 'EEXIST' || err?.code === 'EPERM' || err?.code === 'EACCES';
+// EPERM/EACCES mean transient directory churn only on Windows. On POSIX they
+// are real permission failures and must surface at once instead of looking like
+// an occupied lock until the wait budget expires.
+export function isMkdirContention(err, platform = process.platform) {
+  return err?.code === 'EEXIST'
+    || (platform === 'win32' && (err?.code === 'EPERM' || err?.code === 'EACCES'));
 }
 
 // rm's Windows answer under contention mirrors mkdir's. Removing a directory
@@ -137,8 +138,10 @@ export function isMkdirContention(err) {
 // `EPERM … agent-inbox.md.lock.recover` thrown by a bare rmSync of the recover
 // guard, and their items were never appended — the same loss the mkdir half of
 // this handling removed, resurfacing one call later.
-export function isRmContention(err) {
-  return err?.code === 'EPERM' || err?.code === 'EACCES' || err?.code === 'EBUSY' || err?.code === 'ENOTEMPTY';
+export function isRmContention(err, platform = process.platform) {
+  if (err?.code === 'ENOTEMPTY') return true;
+  return platform === 'win32'
+    && (err?.code === 'EPERM' || err?.code === 'EACCES' || err?.code === 'EBUSY');
 }
 
 // Best-effort removal of a lock artifact (the lock dir or the recover guard).

@@ -6,22 +6,25 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveCli } from "@/lib/clis";
-import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
+import { accumulateTokens, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
-import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
+import { renderAndMarkPdf, renderLatexAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
 import { createCvEnvelopeFilter, type CvEnvelope } from "@/lib/cv-envelope.mjs";
+import { readCvOutputConfig, latexSourceFor } from "@/lib/cv-output-config.mjs";
+import { normalizeRequestedPositioning, resolveCvPositioning } from "@/lib/cv-positioning.mjs";
 import { buildPrompt, isShellSafeCompanyName } from "@/lib/run-prompts.mjs";
 import { claudeCliArgs } from "@/lib/claude-invocation.mjs";
 import { acquireTrackerWrite, releaseTrackerWrite } from "@/lib/core/run-registry";
+import { runEvaluationRequest } from "@/lib/evaluation-runner.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 800; // a real oferta evaluation / pdf-mode CV tailoring + render is heavy and multi-step
 
 export async function POST(req: Request) {
-  let body: { kind?: string; input?: string; cliId?: string };
+  let body: { kind?: string; input?: string; cliId?: string; positioning?: string; runId?: string };
   try {
     body = await req.json();
   } catch {
@@ -30,6 +33,13 @@ export async function POST(req: Request) {
   const { kind = "evaluate", input, cliId } = body;
   if (!input || !cliId) {
     return new Response(JSON.stringify({ error: "input and cliId required" }), { status: 400 });
+  }
+  const requestedPositioning = normalizeRequestedPositioning(body.positioning);
+  if (kind === "pdf" && !requestedPositioning) {
+    return new Response(JSON.stringify({ error: "positioning must be auto, agentic, or fde" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
   }
   const resolved = resolveCli(cliId);
   if (!resolved) {
@@ -90,6 +100,13 @@ export async function POST(req: Request) {
   // from this run's freshly parsed envelope before any render, and the agent is
   // no longer told these paths, so a stale file cannot survive into a render.
   let pdfPaths: PdfPaths | undefined;
+  const cvOutput = kind === "pdf" ? readCvOutputConfig(careerOpsRoot()) : undefined;
+  if (cvOutput?.error) {
+    return new Response(JSON.stringify({ error: cvOutput.error }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   if (kind === "pdf") {
     const pathsResult = resolvePdfPaths(input, today, careerOpsRoot(), findReportFile);
     if (!pathsResult.ok) {
@@ -107,46 +124,54 @@ export async function POST(req: Request) {
   // explicit that a guessed date is worse than an absent one (the POSTED column
   // renders absent as `—`, a wrong date as a fresh req). Unknown URL → undefined
   // → the prompt writes no segment at all.
-  const postedAt =
-    kind === "evaluate"
-      ? readInbox().find((j) => j.url === input)?.postedAt ?? readScanDates().get(input)
-      : undefined;
-  const prompt = buildPrompt({ kind, input, memory: readMemory(), today, postedAt, lang });
+  const inboxOffer = kind === "evaluate" ? readInbox().find((j) => j.url === input) : undefined;
+  const postedAt = kind === "evaluate" ? inboxOffer?.postedAt ?? readScanDates().get(input) : undefined;
+  const promptArgs = {
+    kind,
+    input,
+    memory: readMemory(),
+    today,
+    postedAt,
+    reportNum: pdfPaths?.reportNum,
+    positioning: requestedPositioning ?? "auto",
+    cvOutput,
+    companyHint: inboxOffer?.company,
+    lang,
+  };
+
+  if (kind === "evaluate") {
+    return runEvaluationRequest({
+      request: req,
+      input,
+      cliId,
+      spec,
+      binPath,
+      promptArgs,
+      root: careerOpsRoot(),
+      today,
+      postedAt,
+      runId: body.runId,
+    });
+  }
+
+  const prompt = buildPrompt(promptArgs);
 
   const isClaude = cliId === "claude";
   // Which tools each kind gets, and the whole claude argv, live in
   // claude-invocation.mjs — see its header for the policy and for why it is asserted on
   // built values rather than on this file's source. NEVER auto-submits; that
   // remains a prompt-level guarantee.
-  // Non-Claude CLIs get no tool flags from spec.args() at all, so their agents
-  // stay unrestricted here. That gap is route-wide (it applies to 'evaluate' too),
-  // not specific to pdf, and each CLI needs its own mechanism researched — tracked
-  // as #2507 rather than half-fixed here. On those CLIs the backend is the only
-  // INTENDED writer — the agent is not asked to write — but that is mitigation, not
-  // enforcement: the capability is still there for an injected posting to reach.
+  // Evaluation has already branched into its strict read-only adapter. The
+  // remaining kinds keep their established per-CLI behavior because PDF work and
+  // portal repair have different write contracts.
   // A CLI with its own structured stream gets the argv that turns it on, so its
   // stdout matches spec.parseEvent below; spec.args stays the plain-text argv the
   // envelope-parsing routes rely on.
   const args = isClaude ? claudeCliArgs({ kind, prompt }) : (spec.streamArgs ?? spec.args)(prompt);
 
-  // For write-needing kinds, snapshot reports/ so we can verify the worker
-  // actually persisted (non-Claude CLIs lack Write auth and silently no-op).
-  // Names, not a count: reserving a number writes reports/NNN-RESERVED.md and the
-  // final report REPLACES it, so the `.md` count is unchanged and a count-delta
-  // gate reported "didn't save a report" for an evaluation that saved fine (#2085).
-  const reportsDir = path.join(careerOpsRoot(), "reports");
-  const reportEntries = () => {
-    try {
-      return fs.readdirSync(reportsDir);
-    } catch {
-      return [];
-    }
-  };
-  const persists = kind === "evaluate";
-  const reportsBefore = persists ? reportEntries() : [];
   // Tracker-mutating runs hold a write token so a row delete can't race their merge
   // (tracker.mjs delete doesn't yet share a lock with merge-tracker — see run-registry).
-  const writeToken = kind === "evaluate" || kind === "pdf" ? acquireTrackerWrite() : null;
+  const writeToken = kind === "pdf" ? acquireTrackerWrite() : null;
 
   // stdin must reach EOF or the CLI waits on piped input that never comes: Codex's
   // `exec` blocks reading stdin for additional context, hangs until the kill timer,
@@ -297,8 +322,8 @@ export async function POST(req: Request) {
         for (const w of warnings) send({ type: "text", text: `⚠️ ${w}\n` });
       };
       /** Persist the emitted CV; streams the reason and returns false on failure. */
-      const saveCv = (paths: PdfPaths, envelope: CvEnvelope) => {
-        const written = writeCvHtml({ pdfPaths: paths, html: envelope.html });
+      const saveCv = (paths: PdfPaths, html: string) => {
+        const written = writeCvHtml({ pdfPaths: paths, html });
         if (!written.ok) send({ type: "error", msg: written.error.slice(0, 200) });
         return written.ok;
       };
@@ -370,7 +395,7 @@ export async function POST(req: Request) {
       // triggered run (#2172). The tracker is marked ✅ only after a CONFIRMED
       // successful render, not optimistically — same honesty-gate discipline as
       // the evaluate path below.
-      const renderPdf = async (paths: PdfPaths, format: "letter" | "a4") => {
+      const renderPdf = async (paths: PdfPaths, envelope: CvEnvelope, positioning: "agentic" | "fde") => {
         send({ type: "status", label: "Rendering PDF…" });
         // renderAndMarkPdf is designed to resolve, never throw — but this is
         // the one place nothing else awaits or catches this promise (cancel()
@@ -378,22 +403,37 @@ export async function POST(req: Request) {
         // unexpected exception here must still close the stream instead of
         // leaving it — and the write-token — open until process shutdown.
         try {
-          const result = await renderAndMarkPdf({
-            spawnFn: spawn,
-            execPath: process.execPath,
-            root: careerOpsRoot(),
-            pdfPaths: paths,
-            format,
-            reportNum: input,
-          });
+          const result = envelope.kind === "latex-patches"
+            ? await renderLatexAndMarkPdf({
+                spawnFn: spawn,
+                execPath: process.execPath,
+                root: careerOpsRoot(),
+                pdfPaths: paths,
+                source: latexSourceFor(cvOutput!, positioning),
+                patches: envelope.patches,
+                format: envelope.format,
+                reportNum: paths.reportNum,
+                positioning,
+                maxPages: cvOutput?.maxPages,
+                strictPages: cvOutput?.strictPages,
+              })
+            : await renderAndMarkPdf({
+                spawnFn: spawn,
+                execPath: process.execPath,
+                root: careerOpsRoot(),
+                pdfPaths: paths,
+                format: envelope.format,
+                reportNum: paths.reportNum,
+                positioning,
+              });
           if (result.kind === "render-failed") {
             send({ type: "error", msg: result.error.slice(0, 200) });
             return;
           }
           // Non-fatal issues (a defaulted page format, a tracker row not marked) still
           // surface here rather than only in a server log nobody sees.
-          sendWarnings(result.warnings);
-          send({ type: "done", tokens: lastTokens, costUsd: lastCostUsd });
+          sendWarnings("warnings" in result && Array.isArray(result.warnings) ? result.warnings : []);
+          send({ type: "done", tokens: lastTokens, costUsd: lastCostUsd, positioning });
         } catch (e) {
           send({ type: "error", msg: `PDF rendering crashed unexpectedly: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) });
         } finally {
@@ -473,10 +513,25 @@ export async function POST(req: Request) {
             send({ type: "error", msg: "Internal error: the pdf run passed its gate with no CV to save — please report this." });
           } else {
             sendWarnings(envelope.warnings);
-            if (saveCv(pdfPaths, envelope)) {
+            const resolvedPositioning = resolveCvPositioning(requestedPositioning ?? "auto", envelope.positioning);
+            if (!resolvedPositioning.ok) {
+              send({ type: "error", msg: resolvedPositioning.error });
+              return close();
+            }
+            const expectsLatex = cvOutput?.mode === "latex-tex";
+            if (expectsLatex !== (envelope.kind === "latex-patches")) {
+              send({ type: "error", msg: expectsLatex
+                ? "The agent returned HTML, but this profile requires the user-owned LaTeX CV."
+                : "The agent returned LaTeX patches, but this profile is configured for HTML." });
+              return close();
+            }
+            const saved = envelope.kind === "latex-patches"
+              ? true
+              : typeof envelope.html === "string" && saveCv(pdfPaths, envelope.html);
+            if (saved) {
               // Tracked so cancel() can defer releasing writeToken until this
               // settles; close() happens once rendering finishes, not here.
-              pdfRenderPromise = renderPdf(pdfPaths, envelope.format);
+              pdfRenderPromise = renderPdf(pdfPaths, envelope, resolvedPositioning.positioning);
               return;
             }
             // saveCv already streamed the specific reason.
@@ -484,17 +539,11 @@ export async function POST(req: Request) {
           return close();
         }
 
-        const wroteReport = hasNewCompletedReport(reportsBefore, reportEntries());
-        // Honesty gate (#9): a green "done" with a parsed score requires a CLEAN exit,
-        // real output, AND (for evaluations) a report actually written. Anything else
-        // is surfaced — an errored run must never be banked as a confident score.
+        // Non-PDF runs still require clean output. Evaluation has its own contract,
+        // parser, persistence gate, and authoritative artifact check above.
         const baseErr = noOutputError();
         if (baseErr) {
           send({ type: "error", msg: baseErr });
-        } else if (persists && !wroteReport) {
-          // The worker ran but never wrote the report/tracker row (e.g. a CLI
-          // without file-write authorization) — surface it instead of a fake score.
-          send({ type: "error", msg: "This evaluation didn't save a report, so it's not in your tracker. Full evaluation is verified on Claude Code." });
         } else if (!cleanExit || sawError) {
           // Produced output (maybe even a report) but did NOT finish cleanly — flag it
           // instead of recording a confident score off a half-finished run. sawError

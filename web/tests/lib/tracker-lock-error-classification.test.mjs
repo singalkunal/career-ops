@@ -94,61 +94,50 @@ try {
 }
 
 test("the core: a genuine ENOENT from acquireTrackerLock is NOT tagged LOCK_TIMEOUT", { skip: skipCore }, async () => {
-  const unreachableLockDir = path.join(os.tmpdir(), `no-such-parent-${Date.now()}-xyz`, "lockdir");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "trklock-enoent-"));
+  const lockDir = path.join(root, "lockdir");
+  const enoent = Object.assign(new Error("missing lock parent"), { code: "ENOENT" });
   await assert.rejects(
-    () => acquireTrackerLock(unreachableLockDir, { timeoutMs: 2_000, retryMs: 50 }),
+    () => acquireTrackerLock(lockDir, {
+      timeoutMs: 2_000,
+      retryMs: 50,
+      createLockDir: () => { throw enoent; },
+    }),
     (err) => {
+      assert.equal(err, enoent);
       assert.equal(err.code, "ENOENT");
       assert.notEqual(err.code, "LOCK_TIMEOUT", "a filesystem failure must not be mistaken for lock contention");
       return true;
     },
   );
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
-// Two environments cannot produce a persistent mkdir refusal, and in both a
-// green result would mean nothing (same measured skip as
-// tests/pipeline-lock-mkdir-eperm.test.mjs, which this mirrors):
-//   - root: permission bits do not apply, mkdir simply succeeds.
-//   - win32: a POSIX chmod mode maps onto the read-only attribute there, which
-//     does not deny mkdir inside the directory — acquisition would succeed and
-//     no refusal would ever happen. Measured on windows-latest, not assumed.
-const cannotRefuse =
-  typeof process.getuid === "function" && process.getuid() === 0
-    ? "running as root, permission bits do not apply"
-    : process.platform === "win32"
-      ? "win32: a POSIX mode cannot deny mkdir, so the refusal never happens"
-      : false; // NOT null — node:test's `skip` option runs the body but still
-        // reports SKIP for a null value, silently discarding the result.
-
 test(
-  "the core: a PERSISTENT EACCES/EPERM is retried and eventually surfaces as LOCK_TIMEOUT, not thrown raw",
-  { skip: skipCore || cannotRefuse },
+  "the core: POSIX EACCES propagates immediately instead of becoming LOCK_TIMEOUT",
+  { skip: skipCore || process.platform === "win32" },
   async () => {
-    // This is the behavior the PR discussion documents but which had no
-    // executable coverage: unlike ENOENT (immediate, untagged) an EACCES/EPERM
-    // mkdir refusal is classified as CONTENTION by the core's isMkdirContention
-    // (pipeline-lock.mjs, #2777) — because on Windows that is exactly what real
-    // contention looks like. So a persistent (non-transient) permission problem
-    // is retried like real contention would be, and only surfaces once the
-    // overall timeout elapses — as LOCK_TIMEOUT, not as the raw EACCES/EPERM.
-    // withTrackerLock's catch then reports that as TrackerBusyError, same as
-    // genuine contention. Known, accepted, not a gap this fix introduces.
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "trklock-eacces-"));
-    const sealed = path.join(base, "sealed");
-    fs.mkdirSync(sealed);
-    const lockDir = path.join(sealed, "lockdir");
-    fs.chmodSync(sealed, 0o500); // r-x: mkdir inside is refused with EACCES
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "trklock-eacces-"));
+    const lockDir = path.join(root, "lockdir");
+    const permissionError = Object.assign(new Error("permission denied"), { code: "EACCES" });
     try {
+      const started = Date.now();
       await assert.rejects(
-        () => acquireTrackerLock(lockDir, { timeoutMs: 300, retryMs: 20 }),
+        () => acquireTrackerLock(lockDir, {
+          timeoutMs: 2_000,
+          retryMs: 20,
+          createLockDir: () => { throw permissionError; },
+        }),
         (err) => {
-          assert.equal(err.code, "LOCK_TIMEOUT", `expected LOCK_TIMEOUT after retrying, got ${err.code}: ${err.message}`);
+          assert.equal(err, permissionError);
+          assert.equal(err.code, "EACCES");
+          assert.notEqual(err.code, "LOCK_TIMEOUT");
           return true;
         },
       );
+      assert.ok(Date.now() - started < 500, "permission failure was treated as contention");
     } finally {
-      fs.chmodSync(sealed, 0o700);
-      fs.rmSync(base, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
     }
   },
 );

@@ -15378,8 +15378,11 @@ try {
       } else {
         // The signal distinguishes a timeout/kill from an assertion failure —
         // run()'s default 30s is short for six suites in one child process.
-        const killed = lastRunFailure()?.signal;
+        const detail = lastRunFailure();
+        const killed = detail?.signal;
         fail(`web pdf write-scope unit suites failed${killed ? ` (killed: ${killed})` : ''} (run: node --test ${webUnits.join(' ')})`);
+        const tail = (detail?.stderr || detail?.stdout || '').split(/\r?\n/).filter(Boolean).slice(-40);
+        for (const line of tail) console.log(`      ${line}`);
       }
 
       // Parity: everything web/package.json would run must be something we DO run.
