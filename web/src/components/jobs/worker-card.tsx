@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, X, Loader2, AlertTriangle } from "lucide-react";
-import type { Job } from "@/components/jobs/job-store";
+import { Check, X, Loader2, AlertTriangle, Clock3 } from "lucide-react";
+import { isJobActive, type Job } from "@/components/jobs/job-store";
 import { cn } from "@/lib/cn";
 
 // Humanize raw agent tool names into what the user actually cares about, so a
@@ -16,7 +16,7 @@ const STEP_LABELS: Record<string, string> = {
   Write: "Writing the report",
   Edit: "Updating the report",
   NotebookEdit: "Updating the report",
-  Bash: "Saving to your tracker",
+  Bash: "Running a local step",
   TodoWrite: "Planning the steps",
   Task: "Working",
 };
@@ -78,11 +78,13 @@ export function WorkerCard({
   trailing?: React.ReactNode;
 }) {
   const tone = TONE[pillTone(job)];
-  const running = job.status === "running";
-  const elapsed = useElapsed(running, job.startedAt);
+  const active = isJobActive(job);
+  const elapsed = useElapsed(active, job.startedAt);
   const rawLast = job.steps[job.steps.length - 1]?.label;
   const last = rawLast ? humanizeStep(rawLast) : undefined;
-  const bottom = job.status === "done" && job.result?.summary ? job.result.summary : last;
+  const bottom = job.status === "done" && job.result?.summary
+    ? job.result.summary
+    : job.status === "cancelled" ? "Cancelled" : last;
   const inline = variant === "inline";
   const hasScore = job.result?.score != null;
   const authError = isAuthError(job);
@@ -91,7 +93,9 @@ export function WorkerCard({
   return (
     <div className={cn(inline && "rounded-xl border border-border bg-surface/60 p-2.5")}>
       <div className="flex items-center gap-2">
-        {job.status === "running" ? (
+        {job.status === "queued" ? (
+          <Clock3 className="size-3 shrink-0 text-muted" />
+        ) : job.status === "running" || job.status === "persisting" ? (
           <Loader2 className="size-3 shrink-0 animate-spin text-brand" />
         ) : job.status === "error" ? (
           <AlertTriangle className={cn("size-3 shrink-0", tone.icon)} />
@@ -115,15 +119,19 @@ export function WorkerCard({
         )}
       </div>
       <div className={cn("mt-1.5 w-full overflow-hidden rounded-full bg-surface-hover", inline ? "h-1.5" : "h-1")}>
-        {job.status === "running" ? (
+        {job.status === "running" || job.status === "persisting" ? (
           <div className="job-indeterminate h-full w-full" />
+        ) : job.status === "queued" ? (
+          <div className="h-full w-1/4 rounded-full bg-zinc-400/50" />
         ) : (
           <div className={cn("h-full w-full rounded-full", tone.bar)} />
         )}
       </div>
-      {(bottom || running) && (
+      {(bottom || active) && (
         <div className={cn("mt-1 truncate text-faint", inline ? "text-xs" : "text-[10px]")}>
-          {running ? `${last ?? "Working"} · ${fmtElapsed(elapsed)}` : bottom}
+          {active
+            ? `${last ?? (job.status === "queued" ? "Queued" : job.status === "persisting" ? "Persisting" : "Working")} · ${fmtElapsed(elapsed)}`
+            : bottom}
         </div>
       )}
       {authError && (

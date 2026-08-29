@@ -4,7 +4,7 @@ import { careerOpsRoot, readApplications } from "@/lib/career-ops";
 import { getNormalizeTextKey } from "@/lib/core/text-key";
 import { evaluatedKeys, isEvaluated } from "@/lib/whats-new-suppression.mjs";
 import type { DiscoveredOffer } from "@/lib/explore";
-import { collectWhatsNew, resolveOfferLimit } from "@/lib/whats-new.mjs";
+import { collectWhatsNew, resolveOfferLimit, resolveOfferOffset } from "@/lib/whats-new.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,6 +26,7 @@ export async function GET(req: Request) {
   // asks for more. Both stay finite — `count` is always complete, so the true
   // total is free while the rendered list keeps a ceiling (see MAX_OFFER_LIMIT).
   const offerLimit = resolveOfferLimit(searchParams.get("limit"));
+  const offerOffset = resolveOfferOffset(searchParams.get("offset"));
   const cutoff = Date.now() - days * 86_400_000;
   let rows: string[];
   try {
@@ -56,6 +57,6 @@ export async function GET(req: Request) {
     };
   };
 
-  const { offers, count } = collectWhatsNew(rows, { cutoff, toOffer, offerLimit });
+  const { offers, count } = collectWhatsNew(rows, { cutoff, toOffer, offerLimit, offerOffset });
   return Response.json({ offers, count });
 }

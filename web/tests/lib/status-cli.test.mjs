@@ -1,6 +1,6 @@
 // Tests for the two things /api/status decides about set-status.mjs before and
-// after it spawns: which tracker row was asked for, and which line of stdout is
-// the CLI's JSON document.
+// after it spawns: which tracker row was asked for, and which suffix of stdout
+// is the CLI's JSON document.
 //
 // Imports directly from status-cli.mjs (the single source of truth) so the test
 // and the route can never drift.
@@ -21,6 +21,22 @@ test("the JSON document is read even when a warning printed a brace first", () =
     '{"ok":true,"changed":true,"statusLogged":true}',
   ].join("\n");
   assert.deepEqual(parseCliJson(stdout), { ok: true, changed: true, statusLogged: true });
+});
+
+test("the pretty-printed multi-line result from set-status is read", () => {
+  const result = {
+    changed: false,
+    num: 6,
+    company: "Baseten",
+    role: "AI Engineer",
+    oldStatus: "Applied",
+    newStatus: "Applied",
+  };
+  const stdout = [
+    "warning: ledger detail for row {6}",
+    JSON.stringify(result, null, 2),
+  ].join("\n");
+  assert.deepEqual(parseCliJson(stdout), result);
 });
 
 test("a brace inside a warning is not mistaken for the document when no document follows", () => {

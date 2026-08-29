@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Undo2 } from "lucide-react";
-import { useJobs } from "@/components/jobs/job-store";
+import { isJobActive, useJobs } from "@/components/jobs/job-store";
 import type { InboxJob } from "@/lib/career-ops";
 import type { AtsSource } from "@/lib/explore";
 import { ATS_SOURCES } from "@/lib/explore";
@@ -92,7 +92,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
     }
     const m = new Map<string, RowScore>();
     for (const [url, j] of best) {
-      m.set(url, { score: j.result?.score ?? null, tone: j.result?.tone ?? "muted", jobId: j.id, running: j.status === "running" });
+      m.set(url, { score: j.result?.score ?? null, tone: j.result?.tone ?? "muted", jobId: j.id, running: isJobActive(j) });
     }
     return m;
   }, [jobs]);

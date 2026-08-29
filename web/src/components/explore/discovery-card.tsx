@@ -4,8 +4,8 @@ import { useMemo, useState } from "react";
 import { ExternalLink, Plus, Check, Loader2, ShieldQuestion, Sparkles, Coins } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { instrumentSerif } from "@/lib/fonts";
-import { ATS_LABEL, type AtsSource, type DiscoveredOffer } from "@/lib/explore";
-import { useJobs } from "@/components/jobs/job-store";
+import { DISCOVERY_LABEL, type DiscoverySource, type DiscoveredOffer } from "@/lib/explore";
+import { isJobActive, useJobs } from "@/components/jobs/job-store";
 import { useExplore } from "./explore-provider";
 
 function freshness(postedAt: string): string {
@@ -48,9 +48,13 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
     () => jobs.filter((j) => j.input === offer.url).sort((a, b) => b.startedAt - a.startedAt)[0],
     [jobs, offer.url],
   );
-  const working = job?.status === "running";
+  const working = job ? isJobActive(job) : false;
   const doneEval = job?.status === "done" && job.kind === "evaluate";
-  const statusLabel = WORKER_LABEL[job?.kind ?? ""] ?? "Working…";
+  const statusLabel = job?.status === "queued"
+    ? "Queued…"
+    : job?.status === "persisting"
+      ? "Saving…"
+      : WORKER_LABEL[job?.kind ?? ""] ?? "Working…";
 
   const isAdded = added.has(offer.url) || inPipeline || working || doneEval;
   const isAdding = adding.has(offer.url);
@@ -86,7 +90,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-        <span className="rounded border border-border px-1.5 py-0.5 font-medium text-muted">{ATS_LABEL[offer.ats as AtsSource] ?? offer.ats}</span>
+        <span className="rounded border border-border px-1.5 py-0.5 font-medium text-muted">{DISCOVERY_LABEL[offer.ats as DiscoverySource] ?? offer.ats}</span>
         {fresh && <span className="text-faint">{fresh}</span>}
         {unverified && (
           <span
@@ -108,6 +112,10 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
           <Sparkles className="mt-0.5 size-3 shrink-0" />
           {offer.why}
         </p>
+      )}
+
+      {!offer.why && offer.note && (
+        <p className="text-[12px] leading-snug text-muted">{offer.note}</p>
       )}
 
       <div className="mt-0.5">

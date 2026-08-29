@@ -11,6 +11,16 @@ export const DEFAULT_OFFER_LIMIT = 24;
  */
 export const MAX_OFFER_LIMIT = 200;
 
+/** Resolve the first result requested by a paginated Fresh-history caller. */
+export function resolveOfferOffset(raw) {
+  if (raw == null) return 0;
+  const text = String(raw).trim();
+  if (text === "") return 0;
+  const requested = Number(text);
+  if (!Number.isSafeInteger(requested)) return 0;
+  return Math.max(0, requested);
+}
+
 /**
  * Resolve the `?limit=` query value into a finite render ceiling. Anything
  * missing, malformed or out of range degrades to a bounded default rather than
@@ -37,7 +47,7 @@ export function resolveOfferLimit(raw) {
  * caller asked to render. This prevents a UI card limit from masquerading as
  * the number of matches found.
  */
-export function collectWhatsNew(rows, { cutoff, toOffer, offerLimit = DEFAULT_OFFER_LIMIT, fallbackLimit = 12 }) {
+export function collectWhatsNew(rows, { cutoff, toOffer, offerLimit = DEFAULT_OFFER_LIMIT, offerOffset = 0, fallbackLimit = 12 }) {
   const seen = new Set();
   const offers = [];
   let count = 0;
@@ -48,7 +58,7 @@ export function collectWhatsNew(rows, { cutoff, toOffer, offerLimit = DEFAULT_OF
     if (!offer || seen.has(offer.url)) return;
     seen.add(offer.url);
     count += 1;
-    if (offers.length < limit) offers.push(offer);
+    if (count > offerOffset && offers.length < limit) offers.push(offer);
   };
 
   // Recent-by-date supply loop. Walk every row so `count` is not capped by the

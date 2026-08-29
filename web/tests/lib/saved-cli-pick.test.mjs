@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-
-// Mirror of pickSoleInstalled in src/lib/saved-cli.ts (TS; this suite is .mjs).
-function pickSoleInstalled(clis) {
-  const installed = (clis || []).filter((c) => c.installed);
-  return installed.length === 1 ? installed[0].id : null;
-}
+import {
+  CONFIG_CHANGED_EVENT,
+  persistCliId,
+  pickSoleInstalled,
+} from "../../src/lib/saved-cli.mjs";
 
 test("sole installed CLI is the default", () => {
   assert.equal(
@@ -26,4 +25,33 @@ test("zero or two installed CLIs stay unset", () => {
     ]),
     null,
   );
+});
+
+test("selecting a CLI persists it and notifies same-tab consumers", () => {
+  const values = new Map([["career-ops:config", JSON.stringify({ logos: false })]]);
+  const events = [];
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  } });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    dispatchEvent: (event) => events.push(event.type),
+  } });
+
+  try {
+    assert.equal(persistCliId("codex"), true);
+    assert.deepEqual(JSON.parse(values.get("career-ops:config")), {
+      logos: false,
+      mode: "cli",
+      cliId: "codex",
+    });
+    assert.deepEqual(events, [CONFIG_CHANGED_EVENT]);
+  } finally {
+    if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage);
+    else delete globalThis.localStorage;
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
 });

@@ -1,4 +1,5 @@
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
+import { codexReadOnlyArgs, isFatalGenericStderr } from "@/lib/run-cli-support.mjs";
 import { resolveCli } from "@/lib/clis";
 import { careerOpsRoot, readMemory, doctorState } from "@/lib/career-ops";
 
@@ -22,7 +23,7 @@ ACTIONS:
 - evaluate {"url":"https://…","title":"Evaluate · Acme","subtitle":"Role"} — spin ONE read-only evaluation worker on a SPECIFIC posting URL. Only when you actually have a real URL (e.g. from the page the user is on).
 - evaluateCompany {"company":"Anthropic"} — evaluate ALL of the user's PENDING inbox postings for that company. Emit the COMPANY NAME ONLY — never URLs; the app resolves the concrete postings itself. Big batches ask the user to confirm first.
 - research {"target":"https://… or 'my portfolio'","title":"Research · X"} — spin a read-only research worker.
-- generatePdf {"n":"42"} — generate an ATS-optimized CV tailored to application #42 (runs the real pdf mode → output/ + marks the tracker PDF column). Spends tokens.
+- generatePdf {"n":"42","positioning":"auto|agentic|fde"} — generate an ATS-optimized CV tailored to application #42 with the requested positioning (default auto), then mark the tracker PDF column. Spends tokens.
 - setStatus {"n":"42","status":"Applied"} — move a tracked application to a new state (asks the user to confirm first). Canonical states: Evaluated, Applied, Responded, Interview, Offer, Hired, Rejected, Discarded, SKIP. Use the application number (the "#42" on its report page).
 - apply {"url":"https://…"} — open the apply form-proxy for a posting URL (we re-render the real form in plain language; the user verifies and submits it themselves — never auto-submit).
 - setApplyField {"field":"Why this role?","value":"<the answer>"} — write or revise an answer in the apply form the user is filling (only when an APPLY FORM is shown in your context). Use the field's label or id. When the user asks to make an answer shorter/sharper/etc, generate the new text and emit this.
@@ -90,6 +91,7 @@ export async function POST(req: Request) {
   // (remember → /api/memory, setStatus → /api/status), never the CLI editing
   // files directly. Scope its tools so it can advise (read) but not blind-write.
   const isClaude = cliId === "claude";
+  const isCodex = cliId === "codex";
   // allowedTools must be COMMA-separated; disallowedTools is the hard guardrail
   // so the advisor can read (and WebFetch) but never blind-writes or shells out.
   const args = isClaude
@@ -107,7 +109,9 @@ export async function POST(req: Request) {
         "--disallowedTools",
         "Bash,Write,Edit,NotebookEdit,Task",
       ]
-    : spec.args(prompt);
+    : isCodex
+      ? codexReadOnlyArgs(prompt)
+      : spec.args(prompt);
 
   const child = spawnHeadlessCli(binPath, args, { cwd: careerOpsRoot(), env: process.env });
 
@@ -179,7 +183,8 @@ export async function POST(req: Request) {
       });
       child.stderr.on("data", (d: Buffer) => {
         const s = d.toString();
-        if (/error|not found|denied|fatal/i.test(s)) {
+        const isFatalStderr = spec.stderrIsFatal ?? isFatalGenericStderr;
+        if (isFatalStderr(s)) {
           safeEnqueue(`\n[${spec.name}] ${s.trim()}\n`);
         }
       });

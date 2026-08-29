@@ -14,9 +14,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseCvEnvelope, createCvEnvelopeFilter } from "../../src/lib/cv-envelope.mjs";
 
-/** Wrap `body` in a well-formed envelope; `format: null` omits the attribute. */
-function envelope(body, format = "a4") {
-  const open = format === null ? "<<cv-html>>" : `<<cv-html format="${format}">>`;
+/** Wrap `body` in a well-formed envelope; `format: null` omits that attribute. */
+function envelope(body, format = "a4", positioning = "agentic") {
+  const formatAttr = format === null ? "" : ` format="${format}"`;
+  const positioningAttr = positioning === null ? "" : ` positioning="${positioning}"`;
+  const open = `<<cv-html${formatAttr}${positioningAttr}>>`;
   return `${open}\n${body}\n<</cv-html>>`;
 }
 
@@ -33,6 +35,7 @@ test("parseCvEnvelope: extracts html and format from a well-formed envelope", ()
   assert.equal(result.ok, true);
   assert.equal(result.html, DOC);
   assert.equal(result.format, "a4");
+  assert.equal(result.positioning, "agentic");
   assert.deepEqual(result.warnings, []);
 });
 
@@ -43,6 +46,44 @@ test("parseCvEnvelope: accepts letter as a format", () => {
   // Then letter is preserved (a US/Canada role must not silently render A4)
   assert.equal(result.ok, true);
   assert.equal(result.format, "letter");
+});
+
+test("parseCvEnvelope: preserves FDE positioning", () => {
+  const result = parseCvEnvelope(envelope(DOC, "letter", "fde"));
+  assert.equal(result.ok, true);
+  assert.equal(result.positioning, "fde");
+  assert.deepEqual(result.warnings, []);
+});
+
+test("parseCvEnvelope: accepts a prose-only LaTeX patch envelope", () => {
+  const body = JSON.stringify({ patches: [
+    { id: "bullet-1", text: "Built reliable agent harnesses and evals." },
+    { id: "skill-0", text: "MCP | RAG | LLM-as-judge evals" },
+  ] });
+  const result = parseCvEnvelope(
+    `<<cv-html format="letter" positioning="agentic" output="latex-patches">>\n${body}\n<</cv-html>>`,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.kind, "latex-patches");
+  assert.deepEqual(result.patches, JSON.parse(body).patches);
+});
+
+test("parseCvEnvelope: rejects malformed or duplicate LaTeX patches", () => {
+  const duplicate = JSON.stringify({ patches: [
+    { id: "bullet-1", text: "one" },
+    { id: "bullet-1", text: "two" },
+  ] });
+  const result = parseCvEnvelope(
+    `<<cv-html format="letter" positioning="agentic" output="latex-patches">>\n${duplicate}\n<</cv-html>>`,
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.error, /invalid or duplicate/i);
+});
+
+test("parseCvEnvelope: rejects an unknown positioning", () => {
+  const result = parseCvEnvelope(envelope(DOC, "letter", "generic"));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /positioning/i);
 });
 
 test("parseCvEnvelope: normalizes format case", () => {

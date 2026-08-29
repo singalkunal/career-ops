@@ -30,6 +30,7 @@ export type StartJobInput = {
   input: string;
   page?: string;
   batchId?: string;
+  positioning?: "auto" | "agentic" | "fde";
 };
 
 export type ActionCtx = {
@@ -248,7 +249,16 @@ const ACTIONS: Record<string, ActionDef> = {
       const n = String(raw.n ?? "").trim();
       if (!n) return { status: "ignored", note: "need an application #" };
       const app = ctx.applications.find((a) => a.n === n);
-      const id = ctx.startJob({ title: `CV PDF · ${app?.company ?? `#${n}`}`, subtitle: "tailored CV", kind: "pdf", input: n, page: `/pipeline/${n}` });
+      const requested = String(raw.positioning ?? "auto").trim().toLowerCase();
+      const positioning = requested === "agentic" || requested === "fde" ? requested : "auto";
+      const id = ctx.startJob({
+        title: `CV PDF · ${app?.company ?? `#${n}`}`,
+        subtitle: `${positioning === "fde" ? "FDE" : positioning === "agentic" ? "Agentic" : "Auto"} positioning`,
+        kind: "pdf",
+        input: n,
+        page: `/pipeline/${n}`,
+        positioning,
+      });
       return { status: "done", jobIds: id ? [id] : [] };
     },
   },

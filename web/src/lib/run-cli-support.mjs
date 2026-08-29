@@ -158,6 +158,22 @@ export function codexStreamArgs(prompt) {
   return ["exec", "--json", "--color", "never", prompt];
 }
 
+/** Read-only argv for the corner assistant's advisory Codex run. */
+export function codexReadOnlyArgs(prompt) {
+  return [
+    "--ask-for-approval",
+    "never",
+    "exec",
+    "--strict-config",
+    "--ignore-user-config",
+    "--sandbox",
+    "read-only",
+    "--ephemeral",
+    "--skip-git-repo-check",
+    prompt,
+  ];
+}
+
 /**
  * Convert one `codex exec --json` JSONL event into dashboard-friendly data.
  * @param {string} line

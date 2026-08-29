@@ -10,19 +10,28 @@ export const maxDuration = 120;
 // each step for the "behind the scenes" strip, then bring the window to the front
 // so the HUMAN reviews and submits. NEVER submits — there is no submit path here.
 export async function POST(req: Request) {
-  let body: { sessionId?: string; answers?: Record<string, string>; fields?: ApplyField[]; handoff?: boolean; company?: string };
+  let body: { sessionId?: string; answers?: Record<string, string>; fields?: ApplyField[]; handoff?: boolean; company?: string; n?: string };
   try {
     body = await req.json();
   } catch {
     return Response.json({ error: "bad json" }, { status: 400 });
   }
-  const { sessionId, answers = {}, fields = [], handoff, company } = body;
+  const { sessionId, answers = {}, fields = [], handoff, company, n } = body;
   if (!sessionId) return Response.json({ error: "sessionId required" }, { status: 400 });
 
-  // Resolve the tailored CV server-side (never trust a client path): by the
-  // offer's company if known, else best-effort from the form title.
+  // Resolve the tailored CV server-side (never trust a client path). A tracked
+  // application fails closed unless its exact report-linked artifact exists.
   const session = getSession(sessionId);
-  const cvPath = resolveTailoredCv(company) ?? resolveTailoredCv(companyFromTitle(session?.title)) ?? undefined;
+  const artifact = n
+    ? resolveTailoredCv({ n })
+    : resolveTailoredCv({ company }) ?? resolveTailoredCv({ company: companyFromTitle(session?.title) });
+  if (n && !artifact) {
+    return Response.json(
+      { error: `No tailored CV is linked to application #${n}. Regenerate its CV before filling the form.` },
+      { status: 409 },
+    );
+  }
+  const cvPath = artifact?.path;
 
   try {
     const result = await fillSession(sessionId, answers, fields, cvPath);

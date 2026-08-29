@@ -128,6 +128,10 @@ spend_tier: standard
 
 cv:
   output_format: "html" # "html" (default), "latex", or "text" (tailored markdown, no PDF)
+  # Optional hard page budget for generated CVs. Web LaTeX runs enforce this
+  # before publishing the PDF or marking the tracker row ready.
+  # max_pages: 1
+  # strict_pages: true
   # (Optional) Canva resume design ID for visual CV generation via /career-ops pdf.
   # Find it in your Canva design URL: https://www.canva.com/design/DAxxxxxxx/...
   # The ID starts with "D" and is 11 characters long.
@@ -164,6 +168,16 @@ cv:
   # cv.md stays the source of truth: the section-order guard still compares the
   # rendered CV against it, and still fails if they disagree.
   # sections: [skills, education, certifications, awards]
+
+# Use a hand-tuned LaTeX resume as the layout source when cv.output_format is
+# "latex". Relative paths resolve from the Career Ops root; absolute paths are
+# also accepted for a resume owned by another local knowledge-base checkout.
+# latex:
+#   source: resume.tex
+#   # Optional positioning-specific variants. Either one falls back to source.
+#   sources:
+#     agentic: resume-agentic.tex
+#     fde: resume-fde.tex
 
 # ── Culture Screen ───────────────────────────────────────────────────────────
 #

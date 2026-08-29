@@ -1041,7 +1041,7 @@ export function injectPrintPageCss(html, format = 'a4') {
  * Record a generated PDF in data/pdf-index.tsv so tools can map a tracker
  * report number to the exact PDF (and its source HTML for regeneration).
  *
- * Columns: report \t pdf \t html \t format \t date — paths relative to the
+ * Columns: report \t pdf \t html \t format \t date \t positioning — paths relative to the
  * tracker workspace with forward slashes. One row per PDF path; when a report
  * number is given, older rows for that report are dropped too (regenerated
  * CVs supersede stale entries). The file is gitignored: it references
@@ -1073,7 +1073,7 @@ function updatePDFManifest(reportNum, pdfPath, htmlPath, format) {
   mkdirSync(dirname(manifestPath), { recursive: true });
   writeFileSync(
     manifestPath,
-    '# report\tpdf\thtml\tformat\tdate — written by generate-pdf.mjs, do not edit\n' +
+    '# report\tpdf\thtml\tformat\tdate\tpositioning — written by generate-pdf.mjs, do not edit\n' +
       lines.join('\n') + '\n'
   );
   return relPDF;

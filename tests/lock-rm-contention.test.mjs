@@ -40,14 +40,16 @@ const mkErr = (code) => Object.assign(new Error(code), { code });
 // (rm of a directory with an open handle inside).
 {
   for (const code of ['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY']) {
-    ok(isRmContention(mkErr(code)), `rm ${code} is contention`);
+    ok(isRmContention(mkErr(code), 'win32'), `Windows rm ${code} is contention`);
   }
   for (const code of ['EROFS', 'ENOSPC', 'ENOENT']) {
     ok(!isRmContention(mkErr(code)), `rm ${code} is NOT contention (real breakage must still throw)`);
   }
   for (const code of ['EEXIST', 'EPERM', 'EACCES']) {
-    ok(isMkdirContention(mkErr(code)), `mkdir ${code} is contention`);
+    ok(isMkdirContention(mkErr(code), 'win32'), `Windows mkdir ${code} is contention`);
   }
+  ok(!isMkdirContention(mkErr('EACCES'), 'darwin'), 'macOS mkdir EACCES is a permission failure');
+  ok(!isRmContention(mkErr('EPERM'), 'darwin'), 'macOS rm EPERM is a permission failure');
   ok(!isMkdirContention(mkErr('EROFS')), 'mkdir EROFS is NOT contention');
   ok(!isRmContention(undefined) && !isRmContention(null), 'no error object is not contention');
 }

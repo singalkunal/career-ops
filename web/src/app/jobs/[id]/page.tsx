@@ -5,7 +5,7 @@ import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowLeft, Loader2, Wrench, CircleDot, Check, X } from "lucide-react";
-import { useJobs } from "@/components/jobs/job-store";
+import { isJobActive, useJobs } from "@/components/jobs/job-store";
 import { HeroGlow } from "@/components/hero-glow";
 import { Badge } from "@/components/ui/badge";
 
@@ -34,13 +34,19 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       </Link>
 
       <section className="dot-bg relative mt-5 overflow-hidden rounded-2xl border border-border bg-surface/40 px-6 py-7">
-        {job.status === "running" && <HeroGlow />}
+        {isJobActive(job) && <HeroGlow />}
         <div className="relative z-10">
           <p className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em] text-faint">
-            {job.status === "running" ? (
-              <><Loader2 className="size-3 animate-spin text-brand" /> working</>
+            {job.status === "queued" ? (
+              <><CircleDot className="size-3 text-muted" /> queued</>
+            ) : job.status === "running" ? (
+              <><Loader2 className="size-3 animate-spin text-brand" /> scoring</>
+            ) : job.status === "persisting" ? (
+              <><Loader2 className="size-3 animate-spin text-brand" /> persisting</>
             ) : job.status === "done" ? (
               <><Check className="size-3 text-emerald-500" /> done</>
+            ) : job.status === "cancelled" ? (
+              <><X className="size-3 text-zinc-400" /> cancelled</>
             ) : (
               <><X className="size-3 text-red-400" /> error</>
             )}
@@ -69,9 +75,10 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
             </span>
           </li>
         ))}
-        {job.status === "running" && (
+        {isJobActive(job) && (
           <li className="flex items-center gap-2.5 text-sm text-muted">
-            <Loader2 className="size-3.5 animate-spin text-brand" /> thinking…
+            <Loader2 className="size-3.5 animate-spin text-brand" />
+            {job.status === "queued" ? "waiting for a scorer slot…" : job.status === "persisting" ? "confirming report and tracker…" : "scoring…"}
           </li>
         )}
       </ol>

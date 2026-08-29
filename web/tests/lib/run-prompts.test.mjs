@@ -71,9 +71,38 @@ test("buildPrompt: the pdf prompt still pins tailoring to the real mode", () => 
   assert.match(prompt, /reports\/018-\*\.md/);
 });
 
-test("buildPrompt: every kind ends with exactly one VERDICT instruction", () => {
-  // Given each kind — job-store.tsx parses that final line client-side
-  for (const kind of ["pdf", "research", "evaluate", "fix-portal"]) {
+test("buildPrompt: a user-owned LaTeX profile emits safe prose patches instead of HTML", () => {
+  const prompt = buildPrompt({
+    kind: "pdf",
+    ...ARGS,
+    cvOutput: {
+      mode: "latex-tex",
+      latexSources: { agentic: "/resume/agent.tex", fde: "/resume/fde.tex" },
+    },
+  });
+  assert.match(prompt, /modes\/latex-tex\.md/);
+  assert.match(prompt, /\/resume\/agent\.tex/);
+  assert.match(prompt, /output="latex-patches"/);
+  assert.match(prompt, /plain text only/i);
+  assert.ok(!prompt.includes("templates/cv-template.html"));
+});
+
+test("buildPrompt: pdf uses the canonical report number when tracker and report differ", () => {
+  const prompt = buildPrompt({ kind: "pdf", ...ARGS, input: "309", reportNum: "308" });
+  assert.match(prompt, /application #309/);
+  assert.match(prompt, /reports\/308-\*\.md/);
+  assert.ok(!prompt.includes("reports/309-*.md"));
+});
+
+test("buildPrompt: pdf carries explicit and automatic positioning rules", () => {
+  assert.match(buildPrompt({ kind: "pdf", ...ARGS, positioning: "fde" }), /customer discovery/i);
+  assert.match(buildPrompt({ kind: "pdf", ...ARGS, positioning: "agentic" }), /MCP\/RAG/i);
+  assert.match(buildPrompt({ kind: "pdf", ...ARGS, positioning: "auto" }), /choose the positioning/i);
+  assert.match(buildPrompt({ kind: "pdf", ...ARGS, positioning: "fde" }), /positioning="fde"/i);
+});
+
+test("buildPrompt: unstructured kinds end with exactly one VERDICT instruction", () => {
+  for (const kind of ["pdf", "research", "fix-portal"]) {
     const prompt = buildPrompt({ kind, ...ARGS });
 
     // Then the contract is present exactly once, so the parse cannot pick a
@@ -81,6 +110,7 @@ test("buildPrompt: every kind ends with exactly one VERDICT instruction", () => 
     const mentions = prompt.match(/VERDICT:/g) ?? [];
     assert.equal(mentions.length, 1, `${kind} must state VERDICT once, got ${mentions.length}`);
   }
+  assert.equal((buildPrompt({ kind: "evaluate", ...ARGS }).match(/VERDICT:/g) ?? []).length, 0);
 });
 
 test("buildPrompt: an unknown kind falls through to the evaluate prompt", () => {
@@ -88,7 +118,7 @@ test("buildPrompt: an unknown kind falls through to the evaluate prompt", () => 
   // When building its prompt
   // Then it is the evaluation prompt (the documented default), not an empty string
   const prompt = buildPrompt({ kind: "some-future-kind", ...ARGS });
-  assert.match(prompt, /OFFICIAL career-ops job evaluation/);
+  assert.match(prompt, /official Career Ops web scorer/i);
 });
 
 test("buildPrompt: memory is injected only when non-empty", () => {
@@ -159,42 +189,49 @@ test("isShellSafeCompanyName: refuses anything that could close the quote", () =
   assert.equal(isShellSafeCompanyName(undefined), false);
 });
 
-// ── the tracker-additions TSV row (#1298) ───────────────────────────────────
-//
-// The web is a WRITER of batch/tracker-additions/*.tsv, not just a reader of the
-// tracker. merge-tracker accepts 9 fields forever, so a stale template can never
-// go red — it just silently leaves every web-evaluated job out of the URL dedup.
-// Nothing else in this repo can catch that, which is why it is asserted here.
-
-/** The example row the evaluate prompt tells the agent to append. */
-function exampleTsvRow(prompt) {
-  const line = prompt.split("\n").find((l) => l.includes("\t"));
-  assert.ok(line, "the evaluate prompt must contain a literal tab-separated example row");
-  return line.trim().split("\t");
-}
-
-test("buildPrompt: the evaluate prompt's TSV row carries all 10 fields, url last", () => {
-  // Given an evaluate run
+test("buildPrompt: evaluation is a strict read-only proposal", () => {
   const prompt = buildPrompt({ kind: "evaluate", input: "https://acme.com/jobs/7", memory: "", today: "2026-08-04" });
-  const fields = exampleTsvRow(prompt);
-
-  // Then the row has the 10 fields merge-tracker reads, with the posting URL last
-  assert.equal(fields.length, 10, `expected 10 tab-separated fields, got ${fields.length}: ${JSON.stringify(fields)}`);
-  assert.match(fields[9], /posting URL/i, "the 10th field must be the posting URL");
-  // ...and the prose agrees, so the agent is not told "9" while shown 10
-  assert.match(prompt, /10 TAB-separated columns/);
+  assert.match(prompt, /career-ops-evaluation\/v1/);
+  assert.match(prompt, /complete Career Ops report/i);
+  assert.match(prompt, /do not run reserve-report-num\.mjs/i);
+  assert.match(prompt, /do not write, edit, create, rename, or delete files/i);
+  assert.match(prompt, /backend validates the result, reserves the report number/i);
+  assert.ok(!prompt.includes("\t"), "the proposer must not receive a tracker TSV template");
 });
 
-test("buildPrompt: the evaluate prompt demands an EMPTY url field, never a placeholder", () => {
-  // Given merge-tracker's parseTsvExtras drops "N/A"/"-" precisely so they can't
-  // be misread as the row's LOCATION, and an unconditional template is one an
-  // agent actually follows
-  const prompt = buildPrompt({ kind: "evaluate", input: "https://acme.com/jobs/7", memory: "", today: "2026-08-04" });
+test("buildPrompt: an official ATS description replaces URL-only retrieval", () => {
+  const prompt = buildPrompt({
+    kind: "evaluate",
+    input: "https://jobs.ashbyhq.com/ditto/id",
+    memory: "",
+    today: "2026-08-27",
+    postingSource: {
+      status: "resolved",
+      source: "ashby-posting-api",
+      canonicalUrl: "https://jobs.ashbyhq.com/ditto/id",
+      company: "Ditto",
+      title: "AI Engineer",
+      location: "Remote",
+      description: "Build the agent execution runtime and its evaluation loop. ".repeat(6),
+    },
+  });
+  assert.match(prompt, /Career Ops already retrieved the exact posting from the official ATS/);
+  assert.match(prompt, /<career-ops-official-posting>/);
+  assert.match(prompt, /Build the agent execution runtime/);
+  assert.match(prompt, /Do not replace it with a search result/);
+  assert.ok(!prompt.includes("Use available read-only web access to retrieve it"));
+});
 
-  // Then the instruction says to write all 10 fields and leave the last empty
-  assert.match(prompt, /ALWAYS write all 10 fields/i);
-  assert.match(prompt, /EMPTY if there is no posting URL/i);
-  assert.match(prompt, /never "N\/A"/i);
+test("buildPrompt: an ATS failure preserves web fallback with a diagnostic", () => {
+  const prompt = buildPrompt({
+    kind: "evaluate",
+    input: "https://jobs.ashbyhq.com/ditto/id",
+    memory: "",
+    today: "2026-08-27",
+    postingSource: { status: "unavailable", error: "HTTP 429 Too Many Requests" },
+  });
+  assert.match(prompt, /Use available read-only web access to retrieve it/);
+  assert.match(prompt, /Official ATS retrieval diagnostic: HTTP 429 Too Many Requests/);
 });
 
 // ── the posted: segment (#2692) ─────────────────────────────────────────────
@@ -205,33 +242,18 @@ test("buildPrompt: the evaluate prompt demands an EMPTY url field, never a place
 // worse than an absent one, because the column renders absent as `—` and would
 // render an invented one as a fresh requisition.
 
-test("buildPrompt: a known posting date becomes its own trailing segment", () => {
+test("buildPrompt: a known posting date is owned by the backend", () => {
   const prompt = buildPrompt({ kind: "evaluate", input: "https://acme.com/jobs/7", memory: "", today: "2026-08-14", postedAt: "2026-08-07" });
-  const fields = exampleTsvRow(prompt);
-
-  assert.equal(fields.length, 10, "the row must still carry all 10 fields");
-  // Canonical form, from the regex that CONSUMES it: separator-anchored `; `,
-  // label, colon, ISO date. A mid-sentence mention is deliberately not metadata.
-  assert.match(fields[8], /; posted: 2026-08-07$/);
+  assert.match(prompt, /backend has a recorded posting date \(2026-08-07\) and will append it/i);
+  assert.match(prompt, /Do not include a posted date in the note/i);
 });
 
-test("buildPrompt: no known date writes NO segment, never a guess", () => {
+test("buildPrompt: an unknown posting date is never supplied to the evaluator", () => {
   for (const postedAt of [undefined, null, "", "unknown", "7 Aug 2026", "2026-8-7", "1999-01-01"]) {
     const prompt = buildPrompt({ kind: "evaluate", input: "https://acme.com/jobs/7", memory: "", today: "2026-08-14", postedAt });
-    const fields = exampleTsvRow(prompt);
-    assert.equal(fields.length, 10, `field count changed for ${JSON.stringify(postedAt)}`);
-    assert.ok(!/posted:/.test(fields[8]), `wrote a posted segment for ${JSON.stringify(postedAt)}: ${fields[8]}`);
+    assert.ok(!/backend has a recorded posting date/i.test(prompt), `accepted ${JSON.stringify(postedAt)}`);
   }
 });
-
-test("buildPrompt: the row without a date is byte-identical to before the feature", () => {
-  // The segment is the ONLY difference between the two prompts, so a run with no
-  // recorded date cannot drift from what the CLI has always produced.
-  const withDate = buildPrompt({ kind: "evaluate", input: "u", memory: "", today: "2026-08-14", postedAt: "2026-08-07" });
-  const without = buildPrompt({ kind: "evaluate", input: "u", memory: "", today: "2026-08-14" });
-  assert.equal(withDate.replace("; posted: 2026-08-07", ""), without);
-});
-
 // ── language.modes_dir / language.output ─────────────────────────────────────
 //
 // profile.yml's language settings were WRITE-ONLY on the web path: the settings

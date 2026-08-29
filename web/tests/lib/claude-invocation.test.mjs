@@ -88,18 +88,11 @@ test("toolScopeFor: an unknown kind falls back to the read-only scope", () => {
   assert.equal(scope, TOOL_SCOPES.readOnly);
 });
 
-test("toolScopeFor: evaluate and fix-portal keep Write and Bash on purpose", () => {
-  // Given these kinds genuinely run reserve-report-num.mjs / merge-tracker.mjs /
-  // verify-portals.mjs and persist canonical artifacts
-  for (const kind of ["evaluate", "fix-portal"]) {
-    // When resolving their scope
-    const allowed = toolNames(toolScopeFor(kind).allowed);
-
-    // Then they retain write access — this test exists so removing it is a
-    // deliberate act, not an accident
-    assert.ok(allowed.includes("Write"), `${kind} needs Write`);
-    assert.ok(allowed.includes("Bash"), `${kind} needs Bash`);
-  }
+test("toolScopeFor: evaluate is read-only and fix-portal keeps its repair tools", () => {
+  assert.equal(grantsWriteCapability(toolScopeFor("evaluate")), false);
+  const repairTools = toolNames(toolScopeFor("fix-portal").allowed);
+  assert.ok(repairTools.includes("Write"));
+  assert.ok(repairTools.includes("Bash"));
 });
 
 test("toolScopeFor: every kind blocks sub-agents", () => {
@@ -182,17 +175,14 @@ test("claudeCliArgs: loads no MCP servers", () => {
   assert.ok(!args.includes("--mcp-config"), "no MCP server may be loaded");
 });
 
-test("claudeCliArgs: other kinds keep their MCP servers", () => {
-  // Given #2185 is about pdf. Locking MCP config for every kind would silently stop
-  // a user's configured server (the optional Canva one, say) from loading on an
-  // evaluation — a behaviour change the issue never asked for. #2507 covers the
-  // same gap for the other kinds.
-  for (const kind of ["research", "evaluate", "fix-portal"]) {
+test("claudeCliArgs: research and repair keep their MCP servers", () => {
+  for (const kind of ["research", "fix-portal"]) {
     assert.ok(
       !claudeCliArgs({ kind, prompt: "x" }).includes("--strict-mcp-config"),
       `${kind} must not have its MCP config locked down by a pdf-scoped fix`,
     );
   }
+  assert.ok(claudeCliArgs({ kind: "evaluate", prompt: "x" }).includes("--strict-mcp-config"));
 });
 
 test("claudeCliArgs: carries the prompt and the streaming flags", () => {
@@ -210,12 +200,9 @@ test("claudeCliArgs: carries the prompt and the streaming flags", () => {
   assert.equal(argValue(args, "--permission-mode"), "acceptEdits");
 });
 
-test("claudeCliArgs: evaluate still ships write access", () => {
-  // Given an evaluation, which genuinely persists report + tracker artifacts
+test("claudeCliArgs: evaluate ships no write access", () => {
   const allowed = argValue(claudeCliArgs({ kind: "evaluate", prompt: "x" }), "--allowedTools");
-
-  // Then its argv keeps write access — so removing it is a deliberate act
-  assert.equal(grantsWriteCapability({ allowed, disallowed: "" }), true);
+  assert.equal(grantsWriteCapability({ allowed, disallowed: "" }), false);
 });
 
 test("argValue: absent or dangling flags yield an empty string, not a crash", () => {

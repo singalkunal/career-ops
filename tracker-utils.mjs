@@ -165,8 +165,8 @@ export { canonicalizeTrackerPath };
  * Check whether one absolute path stays inside another directory.
  *
  * This protects recursive lock cleanup from accepting paths that escape the
- * system temp directory through `..` segments or unrelated absolute roots.
- * Also the shared boundary check for outcome.mjs's --clean-output (#2653,
+ * approved runtime directory through `..` segments or unrelated absolute roots.
+ * It is also the shared boundary check for outcome.mjs's --clean-output (#2653,
  * #2911), where an output/ path must be validated before ever being deleted.
  *
  * @param {string} childPath - Candidate path to validate.
@@ -249,16 +249,24 @@ export function pathIsInsideCanonical(childPath, parentDir) {
  * contends on the same lock. `CAREER_OPS_TRACKER_LOCK` exists for tests and
  * unusual local layouts, but lock directories are removed recursively, so
  * env-provided paths must be absolute, live under the OS temp directory, and
- * use the career-ops lock-name prefix. Invalid values are ignored and the
- * deterministic temp-dir default is used instead.
+ * use the career-ops lock-name prefix. Invalid values are ignored. The default
+ * lives under `.career-ops-web/runtime/locks` in the tracker workspace so a
+ * workspace-scoped writer does not need access to the OS temp directory.
  *
  * @param {string} appsFile - Canonical tracker path (see canonicalizeTrackerPath).
  * @returns {string} Safe lock directory path.
  */
 export function trackerLockDirFor(appsFile) {
-  const lockKey = createHash('sha256').update(appsFile).digest('hex').slice(0, 16);
+  const canonicalTracker = canonicalizeTrackerPath(appsFile);
+  const lockKey = createHash('sha256').update(canonicalTracker).digest('hex').slice(0, 16);
   const tmpRoot = realpathSync(tmpdir());
-  const fallback = join(tmpRoot, `career-ops-merge-tracker-${lockKey}.lock`);
+  const fallback = join(
+    resolveWorkspaceRoot(canonicalTracker),
+    '.career-ops-web',
+    'runtime',
+    'locks',
+    `career-ops-merge-tracker-${lockKey}.lock`,
+  );
   const envValue = process.env.CAREER_OPS_TRACKER_LOCK;
   if (!envValue || !isAbsolute(envValue)) return fallback;
 
@@ -330,6 +338,7 @@ function sameLockDirectory(left, right) {
  * @param {number} [options.staleMs=600000] - Metadata-free stale-lock threshold, floored at OWNERLESS_GRACE_MS.
  * @param {string} [options.tracker] - Tracker path recorded in owner metadata.
  * @param {Function} [options.removeLock] - Release hook for deterministic fault tests.
+ * @param {Function} [options.createLockDir] - Atomic mkdir hook for deterministic fault tests.
  * @returns {Promise<{attempts:number,waitMs:number,staleRecovered:boolean,release:Function}>}
  * Lock handle with metadata and an idempotent release method.
  */
@@ -342,6 +351,13 @@ export async function acquireTrackerLock(lockDir, options = {}) {
   const startedAt = Date.now();
   let attempts = 0;
   let staleRecovered = false;
+  const createLockDir = typeof options.createLockDir === 'function'
+    ? options.createLockDir
+    : path => mkdirSync(path);
+
+  // The default lives in a gitignored workspace runtime directory. Create the
+  // stable parent once; the lock directory itself is still the atomic mkdir.
+  mkdirSync(dirname(lockDir), { recursive: true });
 
   // Jitter and the progress rule come from pipeline-lock rather than a fourth
   // hand-rolled wait loop. This file slept a FIXED retryMs and bounded the loop
@@ -358,7 +374,7 @@ export async function acquireTrackerLock(lockDir, options = {}) {
     if (holderStillWedged() || ceilingReached()) break;
     attempts++;
     try {
-      mkdirSync(lockDir);
+      createLockDir(lockDir);
       try {
         writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
           pid: process.pid,

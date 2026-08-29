@@ -15,6 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { recordPdfArtifact, recordPdfPositioning } from "./cv-artifacts.mjs";
 
 /**
  * @typedef {Object} PdfRunSignals
@@ -88,6 +89,41 @@ export function writeCvHtml({ pdfPaths, html }) {
   }
 }
 
+/** Persist the validated prose patch envelope for the isolated LaTeX renderer. */
+export function writeLatexPatches({ pdfPaths, patches }) {
+  try {
+    fs.writeFileSync(pdfPaths.patches, JSON.stringify({ patches }), "utf8");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: `Could not save the LaTeX tailoring patches: ${error.message}` };
+  }
+}
+
+/** Run the non-bundled renderer that safely patches and compiles the user-owned source. */
+export function spawnRenderUserLatex({ spawnFn, execPath, root, source, pdfPaths }) {
+  return new Promise((resolve) => {
+    const child = spawnFn(execPath, [
+      path.join(root, "web", "scripts", "render-user-latex.mjs"),
+      source,
+      pdfPaths.patches,
+      pdfPaths.tex,
+      pdfPaths.finalPdf,
+    ], { cwd: root });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+    child.on("close", (code) => {
+      let data = null;
+      try { data = JSON.parse(stdout); } catch { /* renderer failed before its result */ }
+      resolve(code === 0 && data?.compiled === true
+        ? { ok: true, data }
+        : { ok: false, error: stderr.trim() || "LaTeX compilation failed." });
+    });
+    child.on("error", (error) => resolve({ ok: false, error: `LaTeX rendering failed to start: ${error.message}` }));
+  });
+}
+
 /**
  * Spawn generate-pdf.mjs as a plain child process and resolve once it exits.
  * @param {{spawnFn: Function, execPath: string, root: string, html: string, finalPdf: string, format: "letter"|"a4", reportNum: string}} args
@@ -132,6 +168,24 @@ export function markTrackerReady({ spawnFn, execPath, root, reportNum }) {
       resolve({ ok: code === 0, data, stderr: stderr.trim() });
     });
     child.on("error", (e) => resolve({ ok: false, data: null, stderr: `mark-pdf-ready.mjs failed to start: ${e.message}` }));
+  });
+}
+
+/** Read a compiled PDF's page count with Poppler's pdfinfo. */
+export function inspectPdfPages({ spawnFn, pdfPath }) {
+  return new Promise((resolve) => {
+    const child = spawnFn("pdfinfo", [pdfPath]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+    child.on("close", (code) => {
+      const pages = Number(stdout.match(/^Pages:\s+(\d+)\s*$/m)?.[1]);
+      resolve(code === 0 && Number.isInteger(pages) && pages > 0
+        ? { ok: true, pages }
+        : { ok: false, error: stderr.trim() || "Could not verify the compiled PDF page count." });
+    });
+    child.on("error", (error) => resolve({ ok: false, error: `Could not inspect the compiled PDF: ${error.message}` }));
   });
 }
 
@@ -185,10 +239,10 @@ export function cleanupPdfScratch(scratchDir, prefix) {
  * Call after writeCvHtml for the same pdfPaths — this reads the HTML that
  * function wrote. `format` is passed in rather than read back off disk, so the two
  * no longer share a file and the only coupling left is the HTML itself.
- * @param {{spawnFn: Function, execPath: string, root: string, pdfPaths: {html: string, finalPdf: string}, format: "letter"|"a4", reportNum: string}} args
+ * @param {{spawnFn: Function, execPath: string, root: string, pdfPaths: {html: string, finalPdf: string}, format: "letter"|"a4", reportNum: string, positioning?: "agentic"|"fde"}} args
  * @returns {Promise<RenderResult>}
  */
-export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, format, reportNum }) {
+export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, format, reportNum, positioning }) {
   const warnings = [];
 
   const render = await spawnGeneratePdf({ spawnFn, execPath, root, html: pdfPaths.html, finalPdf: pdfPaths.finalPdf, format, reportNum });
@@ -196,6 +250,11 @@ export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, form
 
   if (!render.ok) {
     return { kind: "render-failed", error: render.stderr || "PDF rendering failed." };
+  }
+
+  if (positioning) {
+    const recorded = recordPdfPositioning(root, reportNum, positioning);
+    if (!recorded.ok) warnings.push(`PDF rendered, but its CV positioning was not recorded: ${recorded.error}`);
   }
 
   // The PDF is the real deliverable and it already rendered successfully — a
@@ -213,4 +272,54 @@ export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, form
   }
 
   return { kind: "rendered", warnings };
+}
+
+/** Compile a safe prose-patched copy of a user-owned LaTeX resume, enforce its page budget, and publish it. */
+export async function renderLatexAndMarkPdf({
+  spawnFn,
+  execPath,
+  root,
+  pdfPaths,
+  source,
+  patches,
+  format,
+  reportNum,
+  positioning,
+  maxPages = 2,
+  strictPages = false,
+}) {
+  const warnings = [];
+  const written = writeLatexPatches({ pdfPaths, patches });
+  if (!written.ok) return { kind: "render-failed", error: written.error };
+
+  const compile = await spawnRenderUserLatex({ spawnFn, execPath, root, source, pdfPaths });
+  try { fs.rmSync(pdfPaths.patches, { force: true }); } catch { /* scratch cleanup is best effort */ }
+  if (!compile.ok) return { kind: "render-failed", error: compile.error };
+
+  const pageInfo = await inspectPdfPages({ spawnFn, pdfPath: pdfPaths.finalPdf });
+  if (!pageInfo.ok) {
+    if (strictPages) return { kind: "render-failed", error: pageInfo.error };
+    warnings.push(pageInfo.error);
+  } else if (pageInfo.pages > maxPages) {
+    const message = `The tailored LaTeX CV rendered to ${pageInfo.pages} pages; the configured limit is ${maxPages}.`;
+    if (strictPages) return { kind: "render-failed", error: message };
+    warnings.push(message);
+  }
+
+  const recorded = recordPdfArtifact(root, {
+    reportNum,
+    pdfPath: pdfPaths.finalPdf,
+    sourcePath: pdfPaths.tex,
+    format,
+    positioning,
+  });
+  if (!recorded.ok) warnings.push(`PDF rendered, but its artifact was not recorded: ${recorded.error}`);
+
+  const mark = await markTrackerReady({ spawnFn, execPath, root, reportNum });
+  if (!mark.ok) {
+    warnings.push(mark.data?.error
+      ? `PDF rendered, but the tracker wasn't updated: ${mark.data.error}`
+      : `PDF rendered, but the tracker's PDF column wasn't updated automatically — run \`node mark-pdf-ready.mjs ${reportNum}\` manually.`);
+  }
+  return { kind: "rendered", warnings, pages: pageInfo.ok ? pageInfo.pages : null };
 }

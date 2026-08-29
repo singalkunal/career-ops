@@ -13,6 +13,7 @@ import { GeneratePdfButton } from "@/components/generate-pdf-button";
 import { ApplyButton } from "@/components/apply-button";
 import { DeleteFromTracker } from "@/components/delete-from-tracker";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
+import { resolveTailoredCv } from "@/lib/apply/cv";
 
 // Progressive disclosure of the report. The core writes prose blocks
 // "## F) Verdict (lead)", "## A) Role Summary", "## B) Match with CV", then
@@ -68,6 +69,7 @@ export function ReportView({
   const archetype = field("Archetype");
   const url = field("URL");
   const company = app ? companyPresentation(app) : null;
+  const cvArtifact = resolveTailoredCv({ n: id });
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
@@ -99,7 +101,12 @@ export function ReportView({
           })()}
           {meta?.legitimacy && <Badge tone={legitimacyTone(meta.legitimacy)}>{meta.legitimacy}</Badge>}
           {app && <StatusSelect n={id} current={app.status} />}
-          <GeneratePdfButton n={id} company={app?.company ?? meta?.title ?? id} pdfReady={(app?.pdf ?? "").includes("✅")} />
+          <GeneratePdfButton
+            n={id}
+            company={app?.company ?? meta?.title ?? id}
+            pdfReady={(app?.pdf ?? "").includes("✅")}
+            artifactPositioning={cvArtifact?.positioning}
+          />
           <ApplyButton n={id} url={url && url.startsWith("http") ? url : undefined} company={app?.company ?? meta?.title ?? id} pdfReady={(app?.pdf ?? "").includes("✅")} />
         </div>
 

@@ -5,6 +5,7 @@ import {
   MAX_OFFER_LIMIT,
   collectWhatsNew,
   resolveOfferLimit,
+  resolveOfferOffset,
 } from "../../src/lib/whats-new.mjs";
 
 const header = "url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation";
@@ -117,4 +118,33 @@ test("the Explore limit still returns the complete count", () => {
 
   assert.equal(result.offers.length, MAX_OFFER_LIMIT);
   assert.equal(result.count, MAX_OFFER_LIMIT + 40);
+});
+
+test("Fresh history can page beyond the 200-card render ceiling", () => {
+  const rows = [
+    header,
+    ...Array.from({ length: MAX_OFFER_LIMIT + 50 }, (_, i) =>
+      `https://example.com/${i}\t2026-08-10\ttest\tRole ${i}\tCompany ${i}\tadded\tRemote`,
+    ),
+  ];
+  const result = collectWhatsNew(rows, {
+    cutoff: Date.parse("2026-08-03"),
+    toOffer,
+    offerLimit: MAX_OFFER_LIMIT,
+    offerOffset: MAX_OFFER_LIMIT,
+  });
+
+  assert.equal(result.count, MAX_OFFER_LIMIT + 50);
+  assert.equal(result.offers.length, 50);
+  assert.equal(result.offers[0].url, "https://example.com/49");
+  assert.equal(result.offers.at(-1).url, "https://example.com/0");
+});
+
+test("Fresh-history offsets reject malformed values and clamp negative values", () => {
+  assert.equal(resolveOfferOffset(null), 0);
+  assert.equal(resolveOfferOffset(""), 0);
+  assert.equal(resolveOfferOffset("200px"), 0);
+  assert.equal(resolveOfferOffset("1e100"), 0);
+  assert.equal(resolveOfferOffset("-20"), 0);
+  assert.equal(resolveOfferOffset(" 200 "), 200);
 });

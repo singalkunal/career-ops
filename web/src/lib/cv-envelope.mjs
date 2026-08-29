@@ -20,6 +20,7 @@
  * refused outright rather than guessed at.
  */
 import { PAGE_FORMATS, DEFAULT_PAGE_FORMAT } from "./page-formats.mjs";
+import { RESOLVED_CV_POSITIONINGS } from "./cv-positioning.mjs";
 
 // Markers must own their line — otherwise an agent merely *mentioning* the
 // syntax in its prose (or a CLI echoing the prompt, as `codex exec` does) would
@@ -35,7 +36,7 @@ export const CLOSE_MARK = "<</cv-html>>";
 // `exec` on a global regex advances `lastIndex` between calls, so the single-shot
 // lookup and the scanning one must not share an object; the opener is only ever
 // scanned with `matchAll`, which clones and needs just the one.
-const OPENER_SRC = String.raw`^<<cv-html(?:[ \t]+format="([^"\n]*)")?>>[ \t]*$`;
+const OPENER_SRC = String.raw`^<<cv-html(?:[ \t]+format="([^"\n]*)")?(?:[ \t]+positioning="([^"\n]*)")?(?:[ \t]+output="([^"\n]*)")?>>[ \t]*$`;
 const CLOSER_SRC = String.raw`^<<\/cv-html>>[ \t]*$`;
 const OPENER = new RegExp(OPENER_SRC, "gm");
 const CLOSER = new RegExp(CLOSER_SRC, "m");
@@ -60,13 +61,19 @@ const CLOSER_ALL = new RegExp(CLOSER_SRC, "gm");
  * capabilities invites it to test the claim.
  */
 export const CV_ENVELOPE_INSTRUCTION =
-  `Do NOT save or edit any file — the platform persists your output for you. Instead OUTPUT the finished HTML inline, between two marker lines. The first line contains only the opening marker carrying your chosen page format — \`${OPEN_MARK} format="a4">>\` or \`${OPEN_MARK} format="letter">>\`, and nothing else on that line. Choose letter for a US/Canada company, otherwise a4. Then the complete HTML document, then a final line containing only \`${CLOSE_MARK}\`. Each marker appears exactly once. Emit the WHOLE document from <!DOCTYPE html> to </html> — never abbreviate, summarize, or write "unchanged"; the platform renders exactly these bytes and nothing else.`;
+  `Do NOT save or edit any file — the platform persists your output for you. Instead OUTPUT the finished HTML inline, between two marker lines. The first line contains only the opening marker carrying your chosen page format and the positioning you actually used — for example \`${OPEN_MARK} format="a4" positioning="agentic">>\` or \`${OPEN_MARK} format="letter" positioning="fde">>\`, and nothing else on that line. Choose letter for a US/Canada company, otherwise a4. Then the complete HTML document, then a final line containing only \`${CLOSE_MARK}\`. Each marker appears exactly once. Emit the WHOLE document from <!DOCTYPE html> to </html> — never abbreviate, summarize, or write "unchanged"; the platform renders exactly these bytes and nothing else.`;
+
+export const CV_LATEX_PATCH_ENVELOPE_INSTRUCTION =
+  `Do NOT save or edit any file — the platform persists your output for you. Instead OUTPUT one JSON object inline between two marker lines. The first line contains only \`${OPEN_MARK} format="letter" positioning="agentic" output="latex-patches">>\` (use positioning="fde" when that is the source you tailored), and nothing else on that line. The JSON body has exactly one key, "patches", whose value is an array of objects shaped {"id":"bullet-0","text":"plain text with no LaTeX commands"}. Include only slots that need changes; preserve every unlisted slot. Then emit a final line containing only \`${CLOSE_MARK}\`. Each marker appears exactly once.`;
 
 /**
  * @typedef {Object} CvEnvelope
  * @property {true} ok
- * @property {string} html - The tailored CV HTML, byte-exact as emitted.
+ * @property {"html"|"latex-patches"} kind
+ * @property {string} [html] - The tailored CV HTML, byte-exact as emitted.
+ * @property {Array<{id:string,text:string}>} [patches] - Safe prose-only changes to a user-owned LaTeX source.
  * @property {"a4"|"letter"} format - Page format for generate-pdf.mjs.
+ * @property {"agentic"|"fde"} positioning - Positioning actually used in the CV.
  * @property {string[]} warnings - Non-fatal issues to surface in the run log.
  */
 
@@ -107,16 +114,9 @@ export function parseCvEnvelope(text) {
 
   // The opener match stops before its newline and the closer starts on its own
   // line, so exactly one delimiting newline sits on each side of the body.
-  const html = afterOpener.slice(0, closer.index).replace(/^\n/, "").replace(/\n$/, "");
-  if (!html.trim()) {
+  const body = afterOpener.slice(0, closer.index).replace(/^\n/, "").replace(/\n$/, "");
+  if (!body.trim()) {
     return { ok: false, error: "The <<cv-html>> envelope was empty — no CV was tailored." };
-  }
-  // A closing </html> is what distinguishes a whole document from one the agent
-  // cut off mid-emission — the realistic failure when emitting 15-25 KB inline.
-  // This belongs here, not in the caller: the caller reports THIS error string, so
-  // splitting the rule out would leave the user with a generic message.
-  if (!/<\/html\s*>/i.test(html)) {
-    return { ok: false, error: "The CV was cut off before its closing </html> tag — the output is incomplete." };
   }
 
   const warnings = [];
@@ -130,7 +130,57 @@ export function parseCvEnvelope(text) {
     else warnings.push(`Unrecognized page format "${declared}"; defaulting to ${DEFAULT_PAGE_FORMAT}.`);
   }
 
-  return { ok: true, html, format, warnings };
+  const declaredPositioning = opener[2];
+  let positioning = "agentic";
+  if (declaredPositioning === undefined) {
+    warnings.push("The agent declared no CV positioning; defaulting to agentic.");
+  } else {
+    const normalizedPositioning = declaredPositioning.trim().toLowerCase();
+    if (!RESOLVED_CV_POSITIONINGS.has(normalizedPositioning)) {
+      return { ok: false, error: `Unrecognized CV positioning "${declaredPositioning}".` };
+    }
+    positioning = normalizedPositioning;
+  }
+
+  const output = String(opener[3] ?? "html").trim().toLowerCase();
+  if (output === "html") {
+    // A closing </html> is what distinguishes a whole document from one the agent
+    // cut off mid-emission — the realistic failure when emitting 15-25 KB inline.
+    if (!/<\/html\s*>/i.test(body)) {
+      return { ok: false, error: "The CV was cut off before its closing </html> tag — the output is incomplete." };
+    }
+    return { ok: true, kind: "html", html: body, format, positioning, warnings };
+  }
+
+  if (output !== "latex-patches") {
+    return { ok: false, error: `Unrecognized CV output "${opener[3]}".` };
+  }
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return { ok: false, error: "The LaTeX patch envelope is not valid JSON." };
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || !Array.isArray(payload.patches)) {
+    return { ok: false, error: "The LaTeX patch envelope must contain a patches array." };
+  }
+  if (Object.keys(payload).some((key) => key !== "patches")) {
+    return { ok: false, error: "The LaTeX patch envelope may contain only the patches key." };
+  }
+  const seen = new Set();
+  const patches = [];
+  for (const patch of payload.patches) {
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)
+      || Object.keys(patch).some((key) => key !== "id" && key !== "text")
+      || typeof patch.id !== "string" || typeof patch.text !== "string"
+      || !/^(?:bullet|skill|item)-\d+$/.test(patch.id) || patch.text.length > 5000
+      || seen.has(patch.id)) {
+      return { ok: false, error: "The LaTeX patch envelope contains an invalid or duplicate patch." };
+    }
+    seen.add(patch.id);
+    patches.push({ id: patch.id, text: patch.text });
+  }
+  return { ok: true, kind: "latex-patches", patches, format, positioning, warnings };
 }
 
 /**

@@ -22,7 +22,10 @@ export function slugify(s) {
 /**
  * @typedef {Object} PdfPaths
  * @property {string} html - Where the backend writes the tailored HTML it parsed out of the agent's envelope (#2185).
+ * @property {string} patches - Scratch JSON for a safe user-owned LaTeX render.
+ * @property {string} tex - Where the backend writes a tailored copy of a user-owned LaTeX CV.
  * @property {string} finalPdf - Where the backend renders the final PDF (output/cv-{candidate}-{company}-{date}.pdf).
+ * @property {string} reportNum - Canonical report-file number used by the PDF manifest.
  */
 
 /**
@@ -59,6 +62,11 @@ export function resolvePdfPaths(input, today, root, findReportFile) {
     return { ok: false, error: `No report #${input} found — evaluate this posting first.` };
   }
   const companyMatch = path.basename(reportFile).match(/^\d+-(.+)-\d{4}-\d{2}-\d{2}\.md$/);
+  const reportMatch = path.basename(reportFile).match(/^(\d+)-/);
+  if (!reportMatch) {
+    return { ok: false, error: `The report for application #${input} has no canonical report number.` };
+  }
+  const reportNum = reportMatch[1];
   const companySlug = companyMatch ? companyMatch[1] : "company";
   let candidateSlug = "candidate";
   try {
@@ -81,8 +89,11 @@ export function resolvePdfPaths(input, today, root, findReportFile) {
   return {
     ok: true,
     paths: {
-      html: path.join(scratchDir, `cv-web-${input}.html`),
+      html: path.join(scratchDir, `cv-web-${reportNum}.html`),
+      patches: path.join(scratchDir, `cv-web-${reportNum}.patches.json`),
+      tex: path.join(root, "output", `cv-${candidateSlug}-${companySlug}-${today}.tex`),
       finalPdf: path.join(root, "output", `cv-${candidateSlug}-${companySlug}-${today}.pdf`),
+      reportNum,
     },
   };
 }

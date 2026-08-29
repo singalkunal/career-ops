@@ -12,6 +12,12 @@ export const ATS_LABEL: Record<AtsSource, string> = {
   ashby: "Ashby",
   workday: "Workday",
 };
+export type DiscoverySource = AtsSource | "yc";
+export const DISCOVERY_SOURCES: DiscoverySource[] = [...ATS_SOURCES, "yc"];
+export const DISCOVERY_LABEL: Record<DiscoverySource, string> = {
+  ...ATS_LABEL,
+  yc: "YC Startup Jobs",
+};
 
 /** The full UI filter state. The keyword/location lists mirror scan.mjs's
  *  buildTitleFilter / buildLocationFilter semantics; sinceDays/ats/limitPerAts map
@@ -24,7 +30,7 @@ export type ExploreFilters = {
   blockHard: string[];
   alwaysAllow: string[];
   sinceDays: number;
-  ats: AtsSource[];
+  ats: DiscoverySource[];
   limitPerAts: number;
 };
 
@@ -36,7 +42,7 @@ export const DEFAULT_FILTERS: ExploreFilters = {
   blockHard: [],
   alwaysAllow: [],
   sinceDays: 7,
-  ats: [...ATS_SOURCES],
+  ats: [...DISCOVERY_SOURCES],
   limitPerAts: 150,
 };
 
@@ -106,12 +112,12 @@ function clampNum(v: unknown, lo: number, hi: number, fallback: number): number 
   return Math.min(hi, Math.max(lo, Math.round(n)));
 }
 
-function cleanAts(v: unknown): AtsSource[] {
-  if (!Array.isArray(v)) return [...ATS_SOURCES];
+function cleanAts(v: unknown): DiscoverySource[] {
+  if (!Array.isArray(v)) return [...DISCOVERY_SOURCES];
   const out = v
     .map((a) => String(a).toLowerCase())
-    .filter((a): a is AtsSource => (ATS_SOURCES as string[]).includes(a));
-  return out.length ? Array.from(new Set(out)) : [...ATS_SOURCES];
+    .filter((a): a is DiscoverySource => (DISCOVERY_SOURCES as string[]).includes(a));
+  return out.length ? Array.from(new Set(out)) : [...DISCOVERY_SOURCES];
 }
 
 /** Apply a (possibly partial) action/assistant patch onto a base. The assistant
@@ -155,7 +161,7 @@ export function filtersToParams(f: ExploreFilters): string {
   if (f.blockHard.length) sp.set("hardno", f.blockHard.join(","));
   if (f.alwaysAllow.length) sp.set("home", f.alwaysAllow.join(","));
   if (f.sinceDays !== DEFAULT_FILTERS.sinceDays) sp.set("since", String(f.sinceDays));
-  if (f.ats.length !== ATS_SOURCES.length) sp.set("ats", f.ats.join(","));
+  if (f.ats.length !== DISCOVERY_SOURCES.length) sp.set("ats", f.ats.join(","));
   if (f.limitPerAts !== DEFAULT_FILTERS.limitPerAts) sp.set("limit", String(f.limitPerAts));
   return sp.toString();
 }

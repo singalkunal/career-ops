@@ -48,9 +48,10 @@ import lever from './providers/lever.mjs';
 import ashby from './providers/ashby.mjs';
 import workday from './providers/workday.mjs';
 import icims from './providers/icims.mjs';
-import { buildTitleFilter, buildLocationFilter, buildContentFilter, matchedTitleKeywords, loadSeenUrls, normalizeUrlForDedup, appendToPipeline, appendToScanHistory, loadBlacklist, parseSinceDays } from './scan.mjs';
+import { buildTitleFilter, buildLocationFilter, buildContentFilter, buildVisaFilter, matchedTitleKeywords, loadSeenUrls, normalizeUrlForDedup, appendToPipeline, appendToScanHistory, loadBlacklist, parseSinceDays } from './scan.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { SEED_SOURCES, toPortalEntry } from './seeds/vc-portfolios.mjs';
+import { enrichYCStartupJob, isYCContextualEngineeringRole, ycExplicitlyRejectsSponsorship } from './seeds/yc-startup-jobs.mjs';
 import { normalizeCompany } from './tracker-utils.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
@@ -284,9 +285,9 @@ function parseArgs(argv) {
   const sinceDays = sinceArg.days ?? 3;
   const limit = Number(valueOf('--limit')) || Infinity;
   const atsArg = valueOf('--ats');
-  // --seeds: optional comma-separated VC portfolio sources (e.g. yc,a16z).
-  // When set, the seed companies are fetched and probed via the ATS providers
-  // instead of (or in addition to) the regular ATS directory walk.
+  // --seeds: optional comma-separated discovery sources (e.g. yc,a16z).
+  // YC searches its official jobs portal directly; company-list sources such
+  // as a16z are probed through the ATS providers.
   const seedsArg = valueOf('--seeds');
   const seeds = seedsArg
     ? seedsArg.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
@@ -430,13 +431,14 @@ export function resolveTitleFilterConfig(config) {
 // pure, exported helper keeps the content_filter.by_title_keyword wiring
 // (#1846) unit-testable without mocking providers or duplicating the rule
 // order in two places for the caller that doesn't need per-stage counts.
-export function passesFilters(job, { titleFilter, locationFilter, contentFilter, titleFilterConfig }) {
-  if (!titleFilter(job.title)) return false;
+export function passesFilters(job, { titleFilter, locationFilter, contentFilter, visaFilter, titleFilterConfig, titleOverride = false }) {
+  if (!titleOverride && !titleFilter(job.title)) return false;
   // job.url is passed so the location filter can fall back to the URL's own
   // location segment when the provider reports a rolled-up "N Locations" string;
   // job.title so a title-stated remote role survives a city-only location.
   if (!locationFilter(job.location, job.url, job.title)) return false;
   if (contentFilter && !contentFilter(job.description, matchedTitleKeywords(job.title, titleFilterConfig))) return false;
+  if (visaFilter && !visaFilter(job.description)) return false;
   return true;
 }
 
@@ -454,7 +456,7 @@ export function sampleCompanies(list, limit, shuffle = false) {
   return copy.slice(0, limit);
 }
 
-// ── VC portfolio seed scan ──────────────────────────────────────────
+// ── Seed-source scan ────────────────────────────────────────────────
 
 // ATS providers that can auto-detect from a careers_url, in probe order.
 // Workday is excluded: its URL format requires a tenant|instance|site triple
@@ -462,11 +464,9 @@ export function sampleCompanies(list, limit, shuffle = false) {
 const SEED_PROVIDERS = [greenhouse, lever, ashby];
 
 /**
- * Scan a VC portfolio seed source and return matching job offers.
- * Companies are converted to PortalEntry shape, then each ATS provider's
- * detect() is tried in order (greenhouse → lever → ashby). The first hit
- * wins and its fetch() is called — identical to how portals.yml tracked
- * companies flow through scan.mjs.
+ * Scan a direct-job or company-list seed source and return matching offers.
+ * Direct-job sources are filtered in place. Company lists are converted to
+ * PortalEntry shape and routed to the matching ATS provider.
  *
  * @param {string}   seedId      Key from SEED_SOURCES (e.g. 'yc').
  * @param {object}   opts        Parsed CLI options.
@@ -478,6 +478,63 @@ const SEED_PROVIDERS = [greenhouse, lever, ashby];
 export async function runSeedScan(seedId, opts, ctx, seenUrls, label) {
   const source = SEED_SOURCES[seedId];
   if (!source) throw new Error(`runSeedScan: unknown seed "${seedId}"`);
+
+  if (source.kind === 'jobs') {
+    let jobs;
+    const sourceWarnings = [];
+    try {
+      jobs = await source.fetch({
+        ctx,
+        titleFilterConfig: opts.titleFilterConfig,
+        maxJobs: opts.limit,
+        onWarning: warning => sourceWarnings.push(warning),
+      });
+    } catch (err) {
+      console.error(`⚠️  ${seedId}: could not search startup jobs — ${err.message}`);
+      return { offers: [], errors: 1, total: 0 };
+    }
+
+    const candidates = jobs.filter(job =>
+      (opts.titleFilter(job.title) || isYCContextualEngineeringRole(job, opts.titleFilterConfig))
+      && opts.locationFilter(job.location, job.url, job.title));
+    const offers = [];
+    let errors = sourceWarnings.length;
+    if (opts.verbose) {
+      for (const warning of sourceWarnings) console.error(`  ✗ ${seedId}: ${warning}`);
+    }
+
+    // The search result is enough for title/location screening. Fetch details
+    // only for those candidates so YC's structured sponsorship field and the
+    // full description can enforce the final content/visa gates.
+    await parallelEach(candidates, 4, async (job) => {
+      let enriched = job;
+      try {
+        enriched = await enrichYCStartupJob(job, ctx);
+      } catch (err) {
+        errors++;
+        if (opts.verbose) console.error(`  ✗ ${seedId}/${job.company}: ${err.message}`);
+      }
+
+      if (ycExplicitlyRejectsSponsorship(enriched.sponsorship)) return;
+      const contextualTitle = isYCContextualEngineeringRole(enriched, opts.titleFilterConfig);
+      if (!passesFilters(enriched, {
+        titleFilter: opts.titleFilter,
+        locationFilter: opts.locationFilter,
+        contentFilter: opts.contentFilter,
+        visaFilter: opts.visaFilter,
+        titleFilterConfig: opts.titleFilterConfig,
+        titleOverride: contextualTitle,
+      })) return;
+      const dedupUrl = normalizeUrlForDedup(enriched.url);
+      if (seenUrls.has(dedupUrl)) return;
+      seenUrls.add(dedupUrl);
+      const { _ycContext, _ycJobId, ...publicJob } = enriched;
+      offers.push({ ...publicJob, source: 'yc-startup-jobs', dateStatus: 'live-undated' });
+    });
+
+    const companies = new Set(jobs.map(job => job.company).filter(Boolean));
+    return { offers, errors, total: companies.size, unit: 'companies searched' };
+  }
 
   let companies;
   try {
@@ -530,6 +587,7 @@ export async function runSeedScan(seedId, opts, ctx, seenUrls, label) {
         titleFilter: opts.titleFilter,
         locationFilter: opts.locationFilter,
         contentFilter: opts.contentFilter,
+        visaFilter: opts.visaFilter,
         titleFilterConfig: opts.titleFilterConfig,
       })) continue;
       const dedupUrl = normalizeUrlForDedup(job.url);
@@ -653,6 +711,7 @@ async function main() {
   // Same content_filter (incl. by_title_keyword scoping) scan.mjs applies —
   // see #1846. Built once here from the same portals.yml config.
   const contentFilter = buildContentFilter(config?.content_filter);
+  const visaFilter = buildVisaFilter(config?.visa_filter);
   if (!fullTitleFilterConfig?.positive?.length) {
     const key = config?.title_filter_full ? 'title_filter_full' : 'title_filter';
     console.error(`⚠️  portals.yml has no ${key}.positive — every fresh posting on every board will match. Consider adding keywords.`);
@@ -661,6 +720,7 @@ async function main() {
   opts.titleFilter = titleFilter;
   opts.locationFilter = locationFilter;
   opts.contentFilter = contentFilter;
+  opts.visaFilter = visaFilter;
   // Raw title_filter config, needed by matchedTitleKeywords() to scope
   // content_filter.by_title_keyword the same way scan.mjs does.
   opts.titleFilterConfig = fullTitleFilterConfig;
@@ -668,7 +728,7 @@ async function main() {
   const atsSummary = opts.ats.length ? `ats: ${opts.ats.join(', ')}` : '';
   const seedsSummary = opts.seeds.length ? `seeds: ${opts.seeds.join(', ')}` : '';
   const sourcesSummary = [atsSummary, seedsSummary].filter(Boolean).join(' | ');
-  log(`Reverse ATS scan — ${sourcesSummary} | since ${opts.sinceDays}d${opts.limit < Infinity ? ` | limit ${opts.limit}/ats` : ''}${opts.shuffle ? ' | shuffled' : ''}${opts.includeUndated ? ' | +undated' : ''}${opts.liveness ? ' | liveness' : ''}${opts.dryRun ? ' | DRY RUN' : ''}`);
+  log(`Reverse ATS scan — ${sourcesSummary} | since ${opts.sinceDays}d${opts.limit < Infinity ? ` | limit ${opts.limit}/source` : ''}${opts.shuffle ? ' | shuffled' : ''}${opts.includeUndated ? ' | +undated' : ''}${opts.liveness ? ' | liveness' : ''}${opts.dryRun ? ' | DRY RUN' : ''}`);
 
   const { seen: seenUrls } = loadSeenUrls();
   const blacklist = loadBlacklist();
@@ -705,6 +765,7 @@ async function main() {
   let totalErrors = cc.totalErrors || 0;
   let droppedNoDate = cc.droppedNoDate || 0;
   let droppedContent = cc.droppedContent || 0;
+  let droppedVisa = cc.droppedVisa || 0;
   let capHit = false;
   // Aggregated from providers/workday.mjs's jobs.workdayNoDateSkip tag — see
   // there for why this is a counter instead of a per-company console.error
@@ -720,7 +781,7 @@ async function main() {
   const datasetStatus = {};
 
   const snapshotCounters = () => ({
-    totalCompaniesScanned, totalErrors, droppedNoDate, droppedContent,
+    totalCompaniesScanned, totalErrors, droppedNoDate, droppedContent, droppedVisa,
     noDateSkipCompanies, noDateSkipJobs, cappedBoards,
   });
   const checkpointBase = () => ({
@@ -770,6 +831,7 @@ async function main() {
       // job.title so a title-stated remote role survives a city-only location.
       if (!locationFilter(job.location, job.url, job.title)) continue;
       if (!contentFilter(job.description, matchedTitleKeywords(job.title, fullTitleFilterConfig))) { droppedContent++; continue; }
+      if (!visaFilter(job.description)) { droppedVisa++; continue; }
       const dedupUrl = normalizeUrlForDedup(job.url);
       if (seenUrls.has(dedupUrl)) continue;
       seenUrls.add(dedupUrl); // intra-scan dedup
@@ -951,16 +1013,17 @@ async function main() {
     log(`\n  done (${errors} unreachable boards skipped)`);
   }
 
-  // ── VC portfolio seed sources (--seeds flag) ───────────────────────
+  // ── Seed discovery sources (--seeds flag) ─────────────────────────
   for (const seedId of opts.seeds) {
     const seedSource = SEED_SOURCES[seedId];
-    log(`\n🌱 ${seedSource.label} (${seedId}-seed) — fetching portfolio...`);
+    const action = seedSource.kind === 'jobs' ? 'searching official jobs...' : 'fetching company list...';
+    log(`\n🌱 ${seedSource.label} (${seedId}-seed) — ${action}`);
     const result = await runSeedScan(seedId, opts, ctx, seenUrls, seedSource.label);
     if (result && result.offers) {
       totalCompaniesScanned += result.total || 0;
       totalErrors += result.errors || 0;
       newOffers.push(...result.offers);
-      log(`  done — ${result.total} companies probed, ${result.offers.length} matches (${result.errors} errors)`);
+      log(`  done — ${result.total} ${result.unit || 'companies probed'}, ${result.offers.length} matches (${result.errors} errors)`);
     }
   }
 
@@ -999,6 +1062,7 @@ async function main() {
     }
   }
   if (droppedContent) log(`Content-filtered:   ${droppedContent}`);
+  if (droppedVisa) log(`Visa-filtered:      ${droppedVisa}`);
   log(`New matches:        ${offers.length}`);
 
   if (offers.length) {
@@ -1055,7 +1119,7 @@ async function main() {
   if (opts.json) {
     process.stdout.write(JSON.stringify({
       date,
-      sources: opts.ats,
+      sources: [...opts.ats, ...opts.seeds.map(seed => `${seed}-seed`)],
       resumed: Boolean(checkpoint),
       sinceDays: opts.sinceDays,
       companiesAvailable: totalCompaniesAvailable,
@@ -1072,6 +1136,7 @@ async function main() {
       postingsFilteredBlacklist: blacklistResult.filteredBlacklist,
       postingsAnnotatedBlacklisted: blacklistResult.annotatedBlacklisted,
       postingsDroppedContent: droppedContent,
+      postingsDroppedVisa: droppedVisa,
       unreachableBoards: totalErrors,
       cappedBoards,
       dnsPacing: { delayed: pacing.delayed, waitedMs: Math.round(pacing.waitedMs) },

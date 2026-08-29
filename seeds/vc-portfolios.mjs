@@ -1,10 +1,10 @@
 // @ts-check
 /**
- * seeds/vc-portfolios.mjs — VC portfolio seed fetchers for career-ops.
+ * seeds/vc-portfolios.mjs — discovery seed registry for career-ops.
  *
- * Pulls public VC portfolio company lists (Y Combinator, Andreessen Horowitz)
- * and emits company entries compatible with the existing ATS scan/discovery
- * path (same shape as tracked_companies entries in portals.yml).
+ * YC searches the official Work at a Startup jobs portal directly. Other
+ * sources, such as Andreessen Horowitz, emit company entries compatible with
+ * the ATS scan path.
  *
  * Design constraints:
  *  - Zero auth — public sources only, no login, no API keys.
@@ -25,6 +25,7 @@
  */
 
 import { DEFAULT_USER_AGENT } from '../user-agent.mjs';
+import { fetchYCStartupJobs } from './yc-startup-jobs.mjs';
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -427,19 +428,20 @@ export async function fetchA16zCompanies({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}
  * Registry mapping seed source names to their fetch functions.
  * Consumed by scan-ats-full.mjs --seeds flag and CLI tooling.
  *
- * To add a new VC portfolio:
- *  1. Add a fetchXyzCompanies() function above.
- *  2. Add an entry here: { fetch: fetchXyzCompanies, label: 'XYZ Portfolio' }
+ * To add a source, provide a fetch function and mark it as either direct jobs
+ * or a company list.
  *
- * @type {Record<string, { fetch: (opts?: object) => Promise<SeedCompany[]>, label: string }>}
+ * @type {Record<string, { fetch: Function, kind: 'jobs'|'companies', label: string }>}
  */
 export const SEED_SOURCES = {
   yc: {
-    fetch: fetchYCCompanies,
-    label: 'Y Combinator Portfolio',
+    fetch: fetchYCStartupJobs,
+    kind: 'jobs',
+    label: 'Y Combinator Startup Jobs',
   },
   a16z: {
     fetch: fetchA16zCompanies,
+    kind: 'companies',
     label: 'Andreessen Horowitz (a16z) Portfolio',
   },
 };
